@@ -1,0 +1,71 @@
+name: Build mkoai APK
+
+# Builds the mkoai phone + TV APKs with the project's own Python build
+# system (marcomovie/scripts/build_android.py) and uploads them as artifacts.
+# The source tree lives in marcomovie/; the signing keystore
+# (mkoai-marco.p12) is at the repo root (private repo, no separate secret).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'marcomovie/**'
+      - 'mkoai-marco.p12'
+      - '.github/workflows/build-mkoai-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Android SDK components
+        run: |
+          # Runner already has an Android SDK at $ANDROID_HOME.
+          # Install exactly the build-tools and NDK this project pins.
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.0" "platforms;android-35" "ndk;28.2.13676358"
+
+      - name: Build phone + TV APKs
+        working-directory: marcomovie
+        env:
+          MARCOMOVIE_JDK: ${{ env.JAVA_HOME }}
+          MARCOMOVIE_BUILD_TOOLS: ${{ env.ANDROID_HOME }}/build-tools/35.0.0
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+          MARCOMOVIE_SIGNING_KEY: ${{ github.workspace }}/mkoai-marco.p12
+          MARCOMOVIE_KEY_PASSWORD: android
+          MARCOMOVIE_EXPECTED_SIGNER_SHA256: 266831fba744af59e47182f1d7b65e9033c90e3cf8867849b983b2f45a19f658
+          LANG: C.utf8
+          LC_ALL: C.utf8
+        run: python3 -X utf8 scripts/build_android.py
+
+      - name: List built APKs
+        run: |
+          ls -l marcomovie/dist/
+          sha256sum marcomovie/dist/*.apk
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkoai-apks
+          path: |
+            marcomovie/dist/mkoai-*-android-mobile.apk
+            marcomovie/dist/mkoai-*-android-tv.apk
+          if-no-files-found: error
