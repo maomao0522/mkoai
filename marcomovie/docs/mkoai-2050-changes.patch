@@ -1,0 +1,1721 @@
+--- a/android/edition-versions.json
++++ b/android/edition-versions.json
+@@ -4,11 +4,11 @@
+     "versionName": "0.5.3"
+   },
+   "android-mobile": {
+-    "versionCode": 20050,
+-    "versionName": "2.0.49"
++    "versionCode": 20051,
++    "versionName": "2.0.50"
+   },
+   "android-tv": {
+-    "versionCode": 20049,
+-    "versionName": "2.0.49"
++    "versionCode": 20051,
++    "versionName": "2.0.50"
+   }
+-}+}
+--- a/android/src/main/java/app/mkoai/player/AwwratedHome.java
++++ b/android/src/main/java/app/mkoai/player/AwwratedHome.java
+@@ -260,7 +260,20 @@
+         try {
+             Cms.Video m = findMatch(eng, sourceKey, title);
+             if (m == null) return new PosterResult(null, true);
+-            if (m.poster == null || m.poster.isEmpty()) return new PosterResult(null, true);
++            if ((m.poster == null || m.poster.isEmpty() || ImageLoader.failed(m.poster))
++                    && m.id != null && !m.id.isEmpty()) {
++                // Some feeds omit artwork from search rows but include it on detail rows.
++                // A present title with no artwork is not an absent title.
++                for (Cms.Video detail : Cms.listing(eng.detail(m.id)).videos) {
++                    if (detail.poster != null && !detail.poster.isEmpty()
++                            && !ImageLoader.failed(detail.poster)
++                            && (detail.title == null || detail.title.isEmpty() || titlesMatch(title, detail.title))) {
++                        rememberPoster(sourceKey, title, detail.poster);
++                        return new PosterResult(detail.poster, false);
++                    }
++                }
++            }
++            if (m.poster == null || m.poster.isEmpty() || ImageLoader.failed(m.poster)) return new PosterResult(null, false);
+             return new PosterResult(m.poster, false);
+         } catch (Throwable ignored) {
+             return new PosterResult(null, false);
+@@ -867,15 +880,12 @@
+             List<Cms.Video> videos, List<String> sourceKeys, File filesDir) {
+         if (videos == null || videos.isEmpty()) return new ArrayList<>();
+         List<Cms.Video> input = new ArrayList<>(videos);
+-        if (sourceKeys == null || sourceKeys.isEmpty()) return input;
++        if (sourceKeys == null || sourceKeys.isEmpty()) return new ArrayList<>();
+         long now = System.currentTimeMillis();
+         JSONObject disk = filesDir == null ? new JSONObject() : loadAvailDisk(filesDir);
+         List<Cms.Video> out = new ArrayList<>();
+         for (Cms.Video v : input) {
+-            if (v.title == null) {
+-                out.add(v);
+-                continue;
+-            }
++            if (v.title == null || v.title.trim().isEmpty()) continue;
+             CrossHit hit = cachedHitPresent(disk, sourceKeys, v.title, now);
+             if (hit != null) {
+                 availabilityCache.put(v.title, hit.region);
+@@ -894,11 +904,9 @@
+                 out.add(v);
+             } else if (cachedAbsentEverywhere(disk, sourceKeys, v.title, now)) {
+                 // Known absent everywhere: drop now, no live check needed.
+-            } else {
+-                out.add(v); // pending: shown for the first paint, verified live in phase 2
+-            }
+-        }
+-        if (out.isEmpty()) return input; // safety net: never blank the home
++            } // Unknown candidates stay off the home until verified by an enabled source.
++        }
++        if (out.isEmpty()) return out; // Empty is accurate; never substitute unverified candidates.
+         return out;
+     }
+ 
+@@ -933,7 +941,7 @@
+         List<Cms.Video> input = new ArrayList<>(videos);
+         // No source configured: skip filters 3+4 so the home never goes blank.
+         if (engs == null || engs.isEmpty() || sourceKeys == null || sourceKeys.isEmpty()) {
+-            return input;
++            return new ArrayList<>();
+         }
+         long now = System.currentTimeMillis();
+         JSONObject disk = filesDir == null ? new JSONObject() : loadAvailDisk(filesDir);
+@@ -1065,7 +1073,7 @@
+             }
+             kept.add(v);
+         }
+-        if (kept.isEmpty()) return input; // safety net: never blank the home
++        if (kept.isEmpty()) return kept; // Only source-confirmed titles belong on the home.
+ 
+         int usCount = 0;
+         for (Cms.Video v : kept) {
+@@ -1114,7 +1122,7 @@
+         if (filesDir == null) return out;
+         try {
+             File f = new File(filesDir, AVAIL_FILE);
+-            if (!f.exists()) return out;
++            if (!f.exists() || f.length() <= 0 || f.length() > 8L*1024*1024) return out;
+             byte[] buf = new byte[(int) f.length()];
+             try (FileInputStream in = new FileInputStream(f)) {
+                 int read = 0;
+@@ -1384,7 +1392,7 @@
+         if (videos == null || videos.isEmpty()) return new ArrayList<>();
+         List<Cms.Video> input = new ArrayList<>(videos);
+         // No source configured: skip filters 3+4 so the home never goes blank.
+-        if (eng == null) return input;
++        if (eng == null) return new ArrayList<>();
+ 
+         long now = System.currentTimeMillis();
+         JSONObject disk = null;
+@@ -1499,7 +1507,7 @@
+             if (detailId != null && !detailId.isEmpty()) v.id = detailId;
+             kept.add(v);
+         }
+-        if (kept.isEmpty()) return input; // safety net: never blank the home
++        if (kept.isEmpty()) return kept; // Only source-confirmed titles belong on the home.
+ 
+         // Cap American titles at ~25% of the final list ("some", not the
+         // majority). Taiwan / China / Korea titles are uncapped. (Only
+@@ -1551,7 +1559,7 @@
+             List<Cms.Video> videos, SourceEngine eng, String sourceKey, File filesDir) {
+         if (videos == null || videos.isEmpty()) return new ArrayList<>();
+         List<Cms.Video> input = new ArrayList<>(videos);
+-        if (eng == null) return input;
++        if (eng == null) return new ArrayList<>();
+ 
+         long now = System.currentTimeMillis();
+         JSONObject disk = null;
+@@ -1663,7 +1671,7 @@
+             if (detailId != null && !detailId.isEmpty()) v.id = detailId;
+             out.add(v);
+         }
+-        if (out.isEmpty()) return input; // safety net: never blank the home
++        if (out.isEmpty()) return out; // Empty is accurate; never substitute unverified candidates.
+         return out;
+     }
+ 
+@@ -1845,7 +1853,7 @@
+         if (filesDir == null) return out;
+         try {
+             File f = new File(filesDir, CACHE_FILE);
+-            if (!f.exists()) return out;
++            if (!f.exists() || f.length() <= 0 || f.length() > 8L*1024*1024) return out;
+             byte[] buf = new byte[(int) f.length()];
+             try (FileInputStream in = new FileInputStream(f)) {
+                 int read = 0;
+--- a/android/src/main/java/app/mkoai/player/BoundedBatch.java
++++ b/android/src/main/java/app/mkoai/player/BoundedBatch.java
+@@ -0,0 +1,24 @@
++package app.mkoai.player;
++
++/** Bounded background metadata work: one slow provider cannot hold all shelves indefinitely. */
++final class BoundedBatch {
++    static <T> java.util.List<T> run(java.util.List<java.util.concurrent.Callable<T>> jobs, int workers, long budgetMs) throws InterruptedException {
++        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(
++                Math.max(1, Math.min(4, workers)), runnable -> {
++                    Thread thread = new Thread(runnable, "mkoai-metadata");
++                    thread.setDaemon(true);
++                    thread.setPriority(Thread.MIN_PRIORITY);
++                    return thread;
++                });
++        try {
++            java.util.List<java.util.concurrent.Future<T>> futures = pool.invokeAll(jobs, budgetMs, java.util.concurrent.TimeUnit.MILLISECONDS);
++            java.util.List<T> result = new java.util.ArrayList<>();
++            for (java.util.concurrent.Future<T> future : futures) {
++                try { result.add(future.isCancelled() ? null : future.get()); }
++                catch (java.util.concurrent.ExecutionException | java.util.concurrent.CancellationException failed) { result.add(null); }
++            }
++            return result;
++        } finally { pool.shutdownNow(); }
++    }
++    private BoundedBatch() {}
++}
+--- a/android/src/main/java/app/mkoai/player/CatalogScreen.java
++++ b/android/src/main/java/app/mkoai/player/CatalogScreen.java
+@@ -435,12 +435,12 @@
+     private static void confirmClearHistory(MainActivity a) {
+         new AppDialog.Builder(a)
+                 .setTitle("清空觀看歷史？")
+-                .setMessage("只清除本機觀看記錄，保留配置和賬號。")
++                .setMessage("清除本機及目前帳號的雲端觀看紀錄；離線時將於恢復同步後完成。保留收藏、配置和帳號。")
+                 .setNegativeButton("取消", null)
+                 .setPositiveButton(
+                         "清空",
+                         (d, n) -> {
+-                            a.prefs.edit().remove(Prefs.WATCH_HISTORY).apply();
++                            SupabaseSync.clearHistory(a);
+                             a.refresh();
+                         })
+                 .show();
+--- a/android/src/main/java/app/mkoai/player/HistoryClearPolicy.java
++++ b/android/src/main/java/app/mkoai/player/HistoryClearPolicy.java
+@@ -0,0 +1,33 @@
++package app.mkoai.player;
++
++/** Account history deletion barrier; independent of Android/network for deterministic checks. */
++final class HistoryClearPolicy {
++    static boolean keep(long updated, long cleared) { return cleared == 0 || updated > cleared; }
++    static String generation(long cleared) { return cleared == 0 ? "" : "__history_generation__" + cleared; }
++    static boolean remoteGeneration(String site, long cleared) { return cleared == 0 || generation(cleared).equals(site); }
++    static boolean localTime(long updated, long cleared, long now) {
++        return keep(updated, cleared) && (cleared == 0 || updated <= now + 300000L);
++    }
++    static String utc(long ms) {
++        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US);
++        f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
++        return f.format(new java.util.Date(ms));
++    }
++    static long parseUtc(String ts) throws Exception {
++        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US);
++        f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
++        long seconds = f.parse(ts.substring(0, 19)).getTime();
++        if (ts.length() > 19 && ts.charAt(19) == '.') {
++            String fraction = ts.substring(20).replaceFirst("[^0-9].*$", "");
++            if (!fraction.isEmpty()) seconds += Integer.parseInt((fraction + "000").substring(0, 3));
++        }
++        // PostgREST returns UTC; accept explicit offsets as well.
++        String offset = ts.substring(19).replaceFirst("^\\.[0-9]+", "");
++        if (offset.matches("[+-][0-9]{2}:[0-9]{2}")) {
++            int minutes = Integer.parseInt(offset.substring(1,3))*60 + Integer.parseInt(offset.substring(4,6));
++            seconds -= (offset.charAt(0) == '+' ? 1 : -1)*minutes*60000L;
++        }
++        return seconds;
++    }
++    private HistoryClearPolicy() {}
++}
+--- a/android/src/main/java/app/mkoai/player/ImageLoader.java
++++ b/android/src/main/java/app/mkoai/player/ImageLoader.java
+@@ -28,6 +28,33 @@
+     private static final java.util.Map<String, java.util.List<ImageView>> IN_FLIGHT =
+             new java.util.HashMap<>();
+ 
++    // View-owned callback: a global weak-key map would still leak if its callback captured the view.
++    private static final int FAILURE_TAG = 0x7f0e5a50;
++    private static Runnable takeFailure(ImageView image) {
++        Object callback = image.getTag(FAILURE_TAG);
++        image.setTag(FAILURE_TAG, null);
++        return callback instanceof Runnable ? (Runnable) callback : null;
++    }
++    private static final java.util.concurrent.ConcurrentHashMap<String, Long> FAILED = new java.util.concurrent.ConcurrentHashMap<>();
++    static boolean failed(String url) {
++        if (url == null) return false;
++        Long at = FAILED.get(url);
++        if (at == null) return false;
++        if (System.currentTimeMillis() - at >= 60000L) { FAILED.remove(url, at); return false; }
++        return true;
++    }
++    private static void markFailed(String url) {
++        if (FAILED.size() >= 1024) FAILED.clear();
++        FAILED.put(url, System.currentTimeMillis());
++    }
++    static void onFailure(ImageView image, Runnable retry) { image.setTag(FAILURE_TAG, retry); }
++    private static boolean validImage(byte[] bytes) {
++        if (bytes == null || bytes.length <= 128) return false;
++        BitmapFactory.Options o = new BitmapFactory.Options();
++        o.inJustDecodeBounds = true;
++        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, o);
++        return o.outWidth > 0 && o.outHeight > 0;
++    }
+     private ImageLoader() {}
+ 
+     static void cancel(MainActivity a) {
+@@ -50,7 +77,14 @@
+ 
+     static void poster(MainActivity a, String address, ImageView image, boolean detail) {
+         image.setTag(address);
+-        if (!Cms.isHttp(address) && !address.startsWith("catpaw://")) return;
++        if (address == null || (!Cms.isHttp(address) && !address.startsWith("catpaw://"))) {
++            if (address != null) markFailed(address);
++            Runnable retry = takeFailure(image);
++            if (retry != null) a.ui.post(() -> {
++                if (!a.isFinishing() && java.util.Objects.equals(address, image.getTag())) retry.run();
++            });
++            return;
++        }
+         final int ticket = a.generation;
+         int initialW = ImageDecodePolicy.targetWidth(image.getWidth(), detail);
+         int initialH = ImageDecodePolicy.targetHeight(image.getHeight(), detail);
+@@ -59,6 +93,7 @@
+                 ImageDecodePolicy.cacheKey(address, initialW, initialH, initialCrop, detail);
+         Bitmap immediate = a.images.get(initialKey);
+         if (immediate != null && !immediate.isRecycled()) {
++            takeFailure(image);
+             image.setImageBitmap(immediate);
+             com.pilipala.glass.GlassworkSurface.invalidateBackdrop(image);
+             return;
+@@ -67,7 +102,7 @@
+         if (preview != null && !preview.isRecycled()) {
+             image.setImageBitmap(preview);
+             com.pilipala.glass.GlassworkSurface.invalidateBackdrop(image);
+-            if (!detail || (preview.getWidth() >= initialW && preview.getHeight() >= initialH)) {
++            if (preview.getWidth() >= initialW && preview.getHeight() >= initialH) {
+                 return;
+             }
+         }
+@@ -83,6 +118,7 @@
+         final String key = ImageDecodePolicy.cacheKey(address, width, height, crop, detail);
+         Bitmap cached = a.images.get(key);
+         if (cached != null && !cached.isRecycled()) {
++            takeFailure(image);
+             image.setImageBitmap(cached);
+             com.pilipala.glass.GlassworkSurface.invalidateBackdrop(image);
+             return;
+@@ -107,6 +143,7 @@
+                                 }
+                                 return;
+                             }
++                            boolean loaded = false;
+                             HttpURLConnection connection = null;
+                             try {
+                                 Cms.ImageRequest source = Cms.imageRequest(address);
+@@ -139,6 +176,8 @@
+                                         BitmapFactory.decodeByteArray(
+                                                 bytes, 0, bytes.length, options);
+                                 if (bitmap != null) {
++                                    loaded = true;
++                                    FAILED.remove(address);
+                                     if (ticket != a.generation
+                                             || Thread.currentThread().isInterrupted()) {
+                                         bitmap.recycle();
+@@ -175,6 +214,7 @@
+                                                         // custom alpha (e.g. the hero backdrop
+                                                         // at 0.45) keep it: only fade views
+                                                         // currently at full opacity.
++                                                        takeFailure(target);
+                                                         if (target.getAlpha() == 1f) {
+                                                             target.setAlpha(0f);
+                                                             target.setImageBitmap(bitmap);
+@@ -193,8 +233,22 @@
+                                 }
+                             } catch (Exception ignored) {
+                             } finally {
++                                final java.util.List<ImageView> failedTargets;
+                                 synchronized (IN_FLIGHT) {
++                                    failedTargets = IN_FLIGHT.get(key) == owned
++                                            ? new java.util.ArrayList<>(owned) : java.util.Collections.emptyList();
+                                     if (IN_FLIGHT.get(key) == owned) IN_FLIGHT.remove(key);
++                                }
++                                if (!loaded && ticket == a.generation && !Thread.currentThread().isInterrupted()) {
++                                    markFailed(address);
++                                    a.ui.post(() -> {
++                                        if (ticket != a.generation || a.isFinishing()) return;
++                                        for (ImageView target : failedTargets) {
++                                            if (!address.equals(target.getTag())) continue;
++                                            Runnable retry = takeFailure(target);
++                                            if (retry != null) retry.run();
++                                        }
++                                    });
+                                 }
+                                 if (connection != null) {
+                                     RequestScope.detach(connection);
+@@ -253,9 +307,11 @@
+         try {
+             File f = diskCacheFile(a, url);
+             if (f == null) return;
+-            try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
++            File temp = new File(f.getParentFile(), f.getName() + "." + Thread.currentThread().getId() + ".tmp");
++            try (java.io.FileOutputStream out = new java.io.FileOutputStream(temp)) {
+                 out.write(bytes);
+             }
++            if (!temp.renameTo(f)) temp.delete();
+         } catch (Exception ignored) {
+         }
+     }
+@@ -295,7 +351,8 @@
+         for (String candidate : candidates) {
+             if (candidate == null || candidate.isEmpty() || !tried.add(candidate)) continue;
+             byte[] cached = readDiskCachedPoster(a, candidate);
+-            if (cached != null) return cached;
++            if (validImage(cached)) return cached;
++            if (cached != null) { File broken = diskCacheFile(a, candidate); if (broken != null) broken.delete(); }
+             HttpURLConnection connection = null;
+             try {
+                 connection = (HttpURLConnection) new URL(candidate).openConnection();
+@@ -327,7 +384,7 @@
+                         out.write(buffer, 0, n);
+                     }
+                     byte[] bytes = out.toByteArray();
+-                    if (bytes.length > 128) {
++                    if (validImage(bytes)) {
+                         writeDiskCachedPoster(a, candidate, bytes);
+                         return bytes;
+                     }
+@@ -370,6 +427,7 @@
+             }
+         }
+         if (url.contains("image.tmdb.org/t/p/")) {
++            url = url.replaceAll("/t/p/w[0-9]+/", detail ? "/t/p/w1280/" : "/t/p/w780/");
+             if (detail) {
+                 // 2.0.40: detail pages load TMDB art at w1280 (was w780) —
+                 // the full-bleed backdrop/poster is upscaled to 1080px wide
+--- a/android/src/main/java/app/mkoai/player/MainActivity.java
++++ b/android/src/main/java/app/mkoai/player/MainActivity.java
+@@ -1387,6 +1387,12 @@
+             }
+         }
+         if (current != null && current.home) {
++            if (!isTvDevice() && MobileShell.activeTab == 1) {
++                MobileShell.clearSearchSession();
++                MobileShell.activeTab = 0;
++                MobileShell.show(this);
++                return;
++            }
+             if (!isTvDevice() && MobileShell.activeTab == 4) {
+                 if (MobileIosSettings.navigateBack(this)) {
+                     return;
+--- a/android/src/main/java/app/mkoai/player/MetadataCachePolicy.java
++++ b/android/src/main/java/app/mkoai/player/MetadataCachePolicy.java
+@@ -0,0 +1,21 @@
++package app.mkoai.player;
++
++/** Merge concurrent metadata refreshes without losing unrelated lists or newer entries. */
++final class MetadataCachePolicy {
++    static org.json.JSONObject merge(org.json.JSONObject latest, org.json.JSONObject incoming) throws org.json.JSONException {
++        for (String group : new String[]{"items", "lists"}) {
++            org.json.JSONObject src = incoming.optJSONObject(group);
++            if (src == null) continue;
++            org.json.JSONObject dest = latest.optJSONObject(group);
++            if (dest == null) { dest = new org.json.JSONObject(); latest.put(group, dest); }
++            java.util.Iterator<String> keys = src.keys();
++            while (keys.hasNext()) {
++                String key = keys.next(); org.json.JSONObject candidate = src.optJSONObject(key);
++                org.json.JSONObject current = dest.optJSONObject(key);
++                if (candidate != null && (current == null || candidate.optLong("ts",0) >= current.optLong("ts",0))) dest.put(key,candidate);
++            }
++        }
++        return latest;
++    }
++    private MetadataCachePolicy() {}
++}
+--- a/android/src/main/java/app/mkoai/player/MobileShell.java
++++ b/android/src/main/java/app/mkoai/player/MobileShell.java
+@@ -260,7 +260,10 @@
+         {"熱門電影", "trending_movie", ""},
+         {"熱門劇集", "trending_tv", ""},
+         {"最新上架", "latest", ""},
+-        {"豆瓣高分", "top_rated", ""},
++        {"Netflix 新片", "discover_tv", "with_networks=213&sort_by=first_air_date.desc&first_air_date.lte=" + new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date())},
++        {"兒童中文", "discover_tv", "with_genres=10762&with_original_language=zh"},
++        {"兒童英語", "discover_tv", "with_genres=10762&with_original_language=en"},
++        {"高分佳作", "top_rated", ""},
+         {"動畫電影", "discover_movie", "with_genres=16"},
+         {"動作電影", "discover_movie", "with_genres=28"},
+         {"國語電影", "discover_movie", "with_original_language=zh"},
+@@ -291,10 +294,19 @@
+     /** At most this many sources are live-checked per home load (current first). */
+     private static final int TMDB_CHECK_MAX_SOURCES = 10;
+ 
++    private String retainedSources = "";
++    private String enabledSourceFingerprint() {
++        StringBuilder key = new StringBuilder();
++        if (a.config != null) for (Cms.Site site : a.config.sites) {
++            if (site != null && a.available(site)) key.append(site.key).append('|').append(site.api).append('\n');
++        }
++        return key.toString();
++    }
+     boolean resume() {
+         if (!homeReady
+                 || activeTab != 0
+                 || retainedRoot == null
++                || !retainedSources.equals(enabledSourceFingerprint())
+                 || retainedEpoch != a.engineEpoch
+                 || retainedWidth != a.windowWidth()
+                 || retainedHeight != a.windowHeight()
+@@ -904,6 +916,7 @@
+         retainedWidth = a.windowWidth();
+         retainedHeight = a.windowHeight();
+         retainedEpoch = a.engineEpoch;
++        retainedSources = enabledSourceFingerprint();
+         if (a.current != null) a.current.mobileHome = this;
+     }
+ 
+@@ -1018,22 +1031,26 @@
+         searchGlyph.setIconTint(0xfff3f4f6);
+         searchCircle.addView(
+                 searchGlyph, new FrameLayout.LayoutParams(a.dp(17), a.dp(17), Gravity.CENTER));
+-        bar.addView(searchCircle, new LinearLayout.LayoutParams(a.dp(34), a.dp(34)));
++        searchCircle.setContentDescription("搜尋影片");
++        bar.addView(searchCircle, new LinearLayout.LayoutParams(a.dp(48), a.dp(48)));
+ 
+         // mkoai 2.0.38: history entry, next to search. Opens the full
+         // 觀看歷史 page (same WATCH_HISTORY the home row reads).
+         FrameLayout historyCircle = new FrameLayout(a);
+         historyCircle.setTag("nav-history");
+-        historyCircle.setContentDescription("歷史紀錄");
++        historyCircle.setContentDescription("觀看紀錄");
++        historyCircle.setFocusable(true);
++        if (android.os.Build.VERSION.SDK_INT >= 26) historyCircle.setTooltipText("觀看紀錄");
+         a.glass(historyCircle, 999);
+         MobileDetailScreen.bindTouchFeedback(historyCircle);
+         historyCircle.setOnClickListener(
+                 v -> a.open(new MainActivity.Screen(a::historyPage), true));
+-        TextView historyGlyph = a.text("◷", 17, 0xfff3f4f6);
+-        historyGlyph.setGravity(Gravity.CENTER);
++        NavGlyph historyGlyph = new NavGlyph(a, 5);
++        historyGlyph.setIconTint(0xfff3f4f6);
++        historyGlyph.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+         historyCircle.addView(
+-                historyGlyph, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+-        LinearLayout.LayoutParams histLp = new LinearLayout.LayoutParams(a.dp(34), a.dp(34));
++                historyGlyph, new FrameLayout.LayoutParams(a.dp(25), a.dp(25), Gravity.CENTER));
++        LinearLayout.LayoutParams histLp = new LinearLayout.LayoutParams(a.dp(48), a.dp(48));
+         histLp.leftMargin = a.dp(6);
+         bar.addView(historyCircle, histLp);
+ 
+@@ -1447,7 +1464,7 @@
+                     if (showHero) {
+                         if (heroContainer.getChildCount() == 0) {
+                             heroContainer.addView(
+-                                    buildHeroShowcaseCard(currentSite, currentVideos.get(0)));
++                                    buildHeroCarousel(currentSite, currentVideos));
+                         }
+                         heroContainer.setVisibility(View.VISIBLE);
+                     } else {
+@@ -1539,6 +1556,7 @@
+                                     // phase-2 refinement below.
+                                     final List<SourceEngine> crossEngs = new ArrayList<>();
+                                     final List<String> crossKeys = new ArrayList<>();
++                                    final List<Cms.Video> verificationCandidates = new ArrayList<>();
+                                     if (catSnapshot.isEmpty() && pageSnapshot == 1) {
+                                         // mkoai 2.0.26: home is awwrated only —
+                                         // no source / Douban / Simkl modes, no
+@@ -1605,20 +1623,20 @@
+                                         // preload or the session cache was
+                                         // used: those lists were already
+                                         // prefiltered.
+-                                        if (!usedPreload && !usedSessionCache) {
++                                        verificationCandidates.addAll(list.videos);
++                                        {
+                                             try {
+                                                 List<Cms.Video> visible =
+                                                         AwwratedHome.prefilterVisibleDiskCross(
+                                                                 list.videos,
+                                                                 crossCheckApiKeys(siteSnapshot),
+                                                                 a.getFilesDir());
+-                                                if (visible != null && !visible.isEmpty()) {
++                                                if (visible != null) {
+                                                     list.videos.clear();
+                                                     list.videos.addAll(visible);
+                                                 }
+                                             } catch (Throwable ignored) {
+-                                                // Prefilter failed: keep the
+-                                                // phase-1 list (safety net).
++                                                list.videos.clear(); // Unverified cards must stay hidden on errors.
+                                             }
+                                         }
+                                         // mkoai 2.0.49: resolve posters
+@@ -1787,9 +1805,7 @@
+                                                         && !currentVideos.isEmpty()) {
+                                                     heroContainer.removeAllViews();
+                                                     heroContainer.addView(
+-                                                            buildHeroShowcaseCard(
+-                                                                    siteSnapshot,
+-                                                                    currentVideos.get(0)));
++                                                            buildHeroCarousel(siteSnapshot, currentVideos));
+                                                     heroContainer.setVisibility(View.VISIBLE);
+                                                 } else {
+                                                     heroContainer.removeAllViews();
+@@ -1901,7 +1917,7 @@
+                                                 }
+                                                 List<Cms.Video> refined =
+                                                         AwwratedHome.applySourceFiltersCross(
+-                                                                list.videos,
++                                                                verificationCandidates,
+                                                                 crossEngs,
+                                                                 crossKeys,
+                                                                 a.getFilesDir());
+@@ -1949,8 +1965,7 @@
+                                                 // position, so it costs one
+                                                 // repaint, not the user's place.
+                                                 if (refined != null
+-                                                        && !refined.isEmpty()
+-                                                        && (refined.size() < filtered.size()
++                                                        && (!refined.equals(filtered)
+                                                                 || posterFilled)) {
+                                                     final List<Cms.Video> refinedFinal = refined;
+                                                     a.ui.post(
+@@ -1984,11 +1999,7 @@
+                                                                         heroContainer
+                                                                                 .removeAllViews();
+                                                                         heroContainer.addView(
+-                                                                                buildHeroShowcaseCard(
+-                                                                                        siteSnapshot,
+-                                                                                        currentVideos
+-                                                                                                .get(
+-                                                                                                        0)));
++                                                                                buildHeroCarousel(siteSnapshot, currentVideos));
+                                                                         heroContainer
+                                                                                 .setVisibility(
+                                                                                         View.VISIBLE);
+@@ -2097,111 +2108,116 @@
+      * `2:3` poster, right `今日首推` pill, bold title, metadata chips, and bottom-right white `▶ 立即观看`
+      * capsule button.
+      */
++    private View buildHeroCarousel(final Cms.Site site, final List<Cms.Video> candidates) {
++        if (candidates.size() <= 1) return buildHeroShowcaseCard(site, candidates.get(0));
++        final int count = Math.min(5, candidates.size());
++        final int pageWidth = Math.max(a.dp(240), a.windowWidth() - a.dp(32));
++        final FrameLayout frame = new FrameLayout(a);
++        final int[] page = {0};
++        final boolean[] touching = {false};
++        final TextView dots = a.text("", 13, Color.WHITE);
++        dots.setGravity(Gravity.CENTER);
++        final Runnable updateDots = () -> {
++            StringBuilder text = new StringBuilder();
++            for (int i = 0; i < count; i++) text.append(i == page[0] ? "●  " : "○  ");
++            dots.setText(text.toString());
++            dots.setContentDescription("推薦 " + (page[0]+1) + " / " + count);
++        };
++        final HorizontalScrollView pager = new HorizontalScrollView(a) {
++            final Runnable advance = new Runnable() {
++                @Override public void run() {
++                    android.graphics.Rect visible = new android.graphics.Rect();
++                    android.view.accessibility.AccessibilityManager accessibility =
++                            (android.view.accessibility.AccessibilityManager) a.getSystemService(Context.ACCESSIBILITY_SERVICE);
++                    if (!touching[0] && isShown() && getGlobalVisibleRect(visible)
++                            && (accessibility == null || !accessibility.isTouchExplorationEnabled())) {
++                        smoothScrollTo(((page[0]+1)%count)*pageWidth, 0);
++                    }
++                    postDelayed(this, 8000L);
++                }
++            };
++            @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); postDelayed(advance,8000L); }
++            @Override protected void onDetachedFromWindow() { removeCallbacks(advance); super.onDetachedFromWindow(); }
++            @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
++                if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { touching[0] = true; removeCallbacks(advance); }
++                boolean handled = super.dispatchTouchEvent(event);
++                if (event.getActionMasked() == android.view.MotionEvent.ACTION_UP
++                        || event.getActionMasked() == android.view.MotionEvent.ACTION_CANCEL) {
++                    touching[0] = false;
++                    post(() -> smoothScrollTo(Math.max(0, Math.min(count-1, Math.round((float)getScrollX()/pageWidth)))*pageWidth,0));
++                    postDelayed(advance,8000L);
++                }
++                return handled;
++            }
++        };
++        pager.setHorizontalScrollBarEnabled(false);
++        pager.setOverScrollMode(View.OVER_SCROLL_NEVER);
++        LinearLayout pages = a.row();
++        pager.addView(pages);
++        for (int i=0; i<count; i++) {
++            View hero = buildHeroShowcaseCard(site,candidates.get(i));
++            pages.addView(hero,new LinearLayout.LayoutParams(pageWidth,-1));
++        }
++        int height = Math.min(640,Math.max(420,(int)(pageWidth/a.getResources().getDisplayMetrics().density*1.25f)));
++        frame.addView(pager,new FrameLayout.LayoutParams(-1,a.dp(height)));
++        frame.addView(dots,new FrameLayout.LayoutParams(-1,a.dp(24),Gravity.BOTTOM));
++        pager.getViewTreeObserver().addOnScrollChangedListener(() -> {
++            int next = Math.max(0,Math.min(count-1,Math.round((float)pager.getScrollX()/pageWidth)));
++            if (next != page[0]) { page[0] = next; updateDots.run(); }
++        });
++        updateDots.run();
++        return frame;
++    }
++
+     private View buildHeroShowcaseCard(final Cms.Site site, final Cms.Video featured) {
+         FrameLayout card = new FrameLayout(a);
+         card.setTag("hero-watch-now-button");
+-        card.setBackground(glassBg(0xff1f1f1f, 0xff181818, a.dp(0), a.dp(0.8f), 0x38ffffff));
+-        card.setClipToOutline(true);
+-        MobileDetailScreen.bindTouchFeedback(card);
+-        card.setOnClickListener(v -> a.openHomeCard(site, featured));
+-
+-        // Ambient backdrop image
+-        ImageView bgImg = new ImageView(a);
+-        bgImg.setScaleType(ImageView.ScaleType.CENTER_CROP);
+-        bgImg.setAlpha(0.45f);
+-        card.addView(bgImg, new FrameLayout.LayoutParams(-1, -1));
+-        if (featured.poster != null && !featured.poster.isEmpty()) a.poster(featured.poster, bgImg);
+-
+-        // mkoai 2.0.38: the page background follows this hero artwork.
+-        if (homeAmbientView != null) homeAmbientView.follow(bgImg);
+-
+-        // Dark gradient scrim
+-        View scrim = new View(a);
+-        scrim.setBackground(
+-                new GradientDrawable(
+-                        GradientDrawable.Orientation.TL_BR,
+-                        new int[] {0x44000000, 0xb8080d0b, 0xeb060908}));
+-        card.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
+-
+-        // Netflix-style bottom fade into the page canvas (#141414),
+-        // behind the content so the title and button stay bright.
+-        View bottomFade = new View(a);
+-        bottomFade.setBackground(
+-                new GradientDrawable(
+-                        GradientDrawable.Orientation.TOP_BOTTOM,
+-                        new int[] {0x00141414, 0xff141414}));
+-        card.addView(bottomFade, new FrameLayout.LayoutParams(-1, a.dp(72), Gravity.BOTTOM));
+-
+-        LinearLayout contentRow = a.row();
+-        contentRow.setGravity(Gravity.CENTER_VERTICAL);
+-        contentRow.setPadding(a.dp(16), a.dp(16), a.dp(16), a.dp(16));
+-        card.addView(contentRow, new FrameLayout.LayoutParams(-1, a.dp(264)));
+-
+-        // Left 2:3 Poster
+-        ImageView poster = new ImageView(a);
+-        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+-        poster.setBackground(a.bg(0xff1e2623, 14));
+-        poster.setClipToOutline(true);
+-        LinearLayout.LayoutParams posterLp = new LinearLayout.LayoutParams(a.dp(132), a.dp(198));
+-        posterLp.rightMargin = a.dp(14);
+-        contentRow.addView(poster, posterLp);
+-        if (featured.poster != null && !featured.poster.isEmpty())
+-            a.poster(featured.poster, poster);
+-
+-        // Right Column
+-        LinearLayout rightCol = a.vertical();
+-        contentRow.addView(rightCol, new LinearLayout.LayoutParams(0, -1, 1f));
+-
+-        TextView topBadge = a.text("✦ 今日首推 · " + site.name, 11, Color.WHITE);
+-        topBadge.setTypeface(null, Typeface.BOLD);
+-        topBadge.setSingleLine(true);
+-        topBadge.setEllipsize(TextUtils.TruncateAt.END);
+-        topBadge.setPadding(a.dp(9), a.dp(3), a.dp(9), a.dp(3));
+-        topBadge.setBackground(glassBg(0x38ffffff, 0x24ffffff, a.dp(999), a.dp(0.6f), 0x33ffffff));
+-        rightCol.addView(topBadge, new LinearLayout.LayoutParams(-2, -2));
+-
+-        TextView title = a.text(featured.title, 20, Color.WHITE);
++        int height = Math.min(640, Math.max(420, (int)(a.windowWidth() / a.getResources().getDisplayMetrics().density * 1.25f)));
++        card.setMinimumHeight(a.dp(height));
++        card.setBackgroundColor(0xff141414);
++        ImageView artwork = new ImageView(a);
++        artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
++        card.addView(artwork, new FrameLayout.LayoutParams(-1, -1));
++        bindReliablePoster(artwork, featured);
++        if (homeAmbientView != null) homeAmbientView.follow(artwork);
++        View gradient = new View(a);
++        gradient.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
++                new int[] {0x00000000, 0x25000000, 0xdf141414, 0xff141414}));
++        card.addView(gradient, new FrameLayout.LayoutParams(-1, -1));
++        LinearLayout content = a.vertical();
++        content.setGravity(Gravity.CENTER_HORIZONTAL);
++        content.setPadding(a.dp(24), a.dp(100), a.dp(24), a.dp(36));
++        TextView title = a.text(featured.title, 27, Color.WHITE);
+         title.setTypeface(null, Typeface.BOLD);
++        title.setGravity(Gravity.CENTER);
+         title.setMaxLines(2);
+         title.setEllipsize(TextUtils.TruncateAt.END);
+-        title.setPadding(0, a.dp(7), 0, a.dp(5));
+-        rightCol.addView(title);
+-
+-        LinearLayout chipsRow = a.row();
+-        String[] tags = {featured.year, featured.area, featured.remarks};
+-        boolean hasChip = false;
+-        for (String rawTag : tags) {
+-            if (rawTag == null || rawTag.trim().isEmpty()) continue;
+-            TextView chip = a.text(rawTag.trim(), 10.5f, 0xffd1d5db);
+-            chip.setTypeface(null, Typeface.BOLD);
+-            chip.setSingleLine(true);
+-            chip.setEllipsize(TextUtils.TruncateAt.END);
+-            chip.setMaxWidth(a.dp(110));
+-            chip.setPadding(a.dp(7), a.dp(2), a.dp(7), a.dp(2));
+-            chip.setBackground(a.bg(0x29ffffff, 6));
+-            LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(-2, -2);
+-            chipLp.rightMargin = a.dp(6);
+-            chipsRow.addView(chip, chipLp);
+-            hasChip = true;
+-        }
+-        if (hasChip) {
+-            rightCol.addView(chipsRow, new LinearLayout.LayoutParams(-1, -2));
+-        }
+-
+-        View flexSpacer = new View(a);
+-        rightCol.addView(flexSpacer, new LinearLayout.LayoutParams(1, 0, 1f));
+-
+-        // Bottom-right Watch Now white capsule button
+-        LinearLayout bottomRow = a.row();
+-        bottomRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+-        TextView watchBtn = a.text("▶ 立即觀看", 12.5f, 0xff0b0f0d);
+-        watchBtn.setTypeface(null, Typeface.BOLD);
+-        watchBtn.setGravity(Gravity.CENTER);
+-        watchBtn.setPadding(a.dp(14), a.dp(7), a.dp(14), a.dp(7));
+-        watchBtn.setBackground(glassBg(0xffffffff, 0xffeaeaf0, a.dp(999), 0, 0));
+-        bottomRow.addView(watchBtn, new LinearLayout.LayoutParams(-2, -2));
+-        rightCol.addView(bottomRow, new LinearLayout.LayoutParams(-1, -2));
+-
++        content.addView(title, new LinearLayout.LayoutParams(-1, -2));
++        String meta = (featured.year == null ? "" : featured.year)
++                + (featured.remarks == null || featured.remarks.isEmpty() ? "" : " · " + featured.remarks);
++        TextView year = a.text(meta, 14, 0xffeeeeee);
++        year.setGravity(Gravity.CENTER);
++        year.setPadding(0, a.dp(9), 0, a.dp(12));
++        content.addView(year);
++        if (featured.description != null && !featured.description.trim().isEmpty()) {
++            TextView summary = a.text(featured.description.replaceAll("<[^>]*>", " "), 14, 0xffeeeeee);
++            summary.setGravity(Gravity.CENTER);
++            summary.setMaxLines(3);
++            summary.setEllipsize(TextUtils.TruncateAt.END);
++            summary.setLineSpacing(a.dp(3), 1f);
++            content.addView(summary, new LinearLayout.LayoutParams(-1, -2));
++        }
++        TextView play = a.text("▶ 播放", 17, 0xff111111);
++        play.setTypeface(null, Typeface.BOLD);
++        play.setGravity(Gravity.CENTER);
++        play.setBackground(a.bg(0xfff5f5f5, 999));
++        LinearLayout.LayoutParams button = new LinearLayout.LayoutParams(-1, a.dp(48));
++        button.topMargin = a.dp(16);
++        content.addView(play, button);
++        MobileDetailScreen.bindTouchFeedback(play);
++        play.setOnClickListener(v -> a.openHomeCard(site, featured));
++        card.addView(content, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
++        card.setOnClickListener(v -> a.openHomeCard(site, featured));
+         return card;
+     }
+ 
+@@ -2266,6 +2282,11 @@
+     private void renderHomeSections(
+             LinearLayout container, Cms.Site site, List<Cms.Video> videos) {
+         container.removeAllViews();
++        if (videos.isEmpty()) {
++            TextView hint = a.text("目前沒有已確認片源收錄的推薦，可直接搜尋作品或重新整理。", 14, 0xffb8c2bd);
++            hint.setPadding(0, a.dp(24), 0, a.dp(20));
++            container.addView(hint);
++        }
+         java.util.LinkedHashMap<String, List<Cms.Video>> groups =
+                 new java.util.LinkedHashMap<>();
+         for (Cms.Video v : videos) {
+@@ -2409,9 +2430,9 @@
+         rowScroll.addView(row);
+         for (int i = 0; i < shown; i++) {
+             WatchHistory.Entry e = items.get(i);
+-            LinearLayout card = buildHistoryCard(e, cardWidthDp, posterHeightDp);
+-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(a.dp(cardWidthDp), -2);
+-            lp.rightMargin = a.dp(10);
++            LinearLayout card = buildHistoryCard(e, 260, 146);
++            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(a.dp(260), -2);
++            lp.rightMargin = a.dp(12);
+             row.addView(card, lp);
+         }
+         container.addView(rowScroll, new LinearLayout.LayoutParams(-1, -2));
+@@ -2429,8 +2450,14 @@
+         ImageView img = new ImageView(a);
+         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+         art.addView(img, new FrameLayout.LayoutParams(-1, -1));
+-        if (e.poster != null && !e.poster.isEmpty()) a.poster(e.poster, img);
+-        else maybeEnrichPoster(img, e.title, null);
++        Cms.Video resumeVideo = new Cms.Video();
++        resumeVideo.title = e.title;
++        resumeVideo.poster = e.poster;
++        bindReliablePoster(img, resumeVideo);
++        TextView playOverlay = a.text("▷", 38, Color.WHITE);
++        playOverlay.setGravity(Gravity.CENTER);
++        playOverlay.setContentDescription("繼續播放 " + e.title);
++        art.addView(playOverlay, new FrameLayout.LayoutParams(-1, -1));
+         // 2.0.40: year bottom-left. History entries carry no year, so it
+         // is filled from TMDB in the background when available. Added
+         // before the progress bar so the bar stays visible on top.
+@@ -2521,7 +2548,7 @@
+     private List<Cms.Site> crossCheckSites(Cms.Site current) {
+         List<Cms.Site> out = new ArrayList<>();
+         Set<String> seenApi = new HashSet<>();
+-        if (current != null && current.api != null && !current.api.isEmpty()) {
++        if (current != null && a.available(current) && current.api != null && !current.api.isEmpty()) {
+             out.add(current);
+             seenApi.add(current.api);
+         }
+@@ -2540,7 +2567,7 @@
+                             || seenApi.contains(s.api)) {
+                         continue;
+                     }
+-                    if (youthOn && SearchVariants.isAdultSource(s)) continue;
++                    if (!a.available(s) || (youthOn && SearchVariants.isAdultSource(s))) continue;
+                     seenApi.add(s.api);
+                     out.add(s);
+                 }
+@@ -2552,7 +2579,7 @@
+                         || seenApi.contains(s.api)) {
+                     continue;
+                 }
+-                if (youthOn && SearchVariants.isAdultSource(s)) continue;
++                if (!a.available(s) || (youthOn && SearchVariants.isAdultSource(s))) continue;
+                 seenApi.add(s.api);
+                 out.add(s);
+             }
+@@ -2584,7 +2611,7 @@
+                                 a.prefs.getBoolean(Prefs.YOUTH_MODE, false);
+                         final List<Cms.Site> checkSites = new ArrayList<>();
+                         final Set<String> seenApi = new HashSet<>();
+-                        if (site.api != null && !site.api.isEmpty()) {
++                        if (a.available(site) && site.api != null && !site.api.isEmpty()) {
+                             checkSites.add(site);
+                             seenApi.add(site.api);
+                         }
+@@ -2597,7 +2624,7 @@
+                                         || checkSites.size() >= TMDB_CHECK_MAX_SOURCES) {
+                                     continue;
+                                 }
+-                                if (youthOn && SearchVariants.isAdultSource(s)) continue;
++                                if (!a.available(s) || (youthOn && SearchVariants.isAdultSource(s))) continue;
+                                 seenApi.add(s.api);
+                                 checkSites.add(s);
+                             }
+@@ -2611,16 +2638,14 @@
+                         for (String[] def : TMDB_ROW_DEFS) {
+                             rows.add(new TmdbRow(def[0], def[1], def[2]));
+                         }
+-                        for (TmdbRow row : rows) {
+-                            if (gen != a.generation || req != homeRequest || a.isFinishing()) {
+-                                return;
+-                            }
+-                            List<TmdbClient.Item> items;
+-                            try {
+-                                items = TmdbClient.list(filesDir, row.kind, row.extra);
+-                            } catch (Throwable ignored) {
+-                                continue; // one dead list must not kill the other rows
+-                            }
++                        List<java.util.concurrent.Callable<List<TmdbClient.Item>>> metadataJobs = new ArrayList<>();
++                        for (TmdbRow row : rows) metadataJobs.add(() -> TmdbClient.list(filesDir, row.kind, row.extra));
++                        List<List<TmdbClient.Item>> metadata = BoundedBatch.run(metadataJobs, 4, 12000L);
++                        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
++                            TmdbRow row = rows.get(rowIndex);
++                            if (gen != a.generation || req != homeRequest || a.isFinishing()) return;
++                            List<TmdbClient.Item> items = metadata.get(rowIndex);
++                            if (items == null) continue;
+                             row.listsLoaded = true;
+                             for (TmdbClient.Item it : items) {
+                                 if (row.confirmed.size() + row.pending.size()
+@@ -2968,12 +2993,12 @@
+                 || epoch != tmdbRowsRenderEpoch
+                 || a.isFinishing()
+                 || tmdbRowsContainerRef == null) return;
+-        int end = Math.min(start + 4, visible.size());
++        int end = Math.min(start + 2, visible.size());
+         for (int i = start; i < end; i++) {
+             tmdbRowsContainerRef.addView(buildTmdbRowSection(site, visible.get(i)));
+         }
+         if (end < visible.size()) {
+-            a.ui.post(() -> renderTmdbRowBatch(site, req, gen, epoch, visible, end));
++            tmdbRowsContainerRef.postOnAnimation(() -> renderTmdbRowBatch(site, req, gen, epoch, visible, end));
+         }
+     }
+ 
+@@ -3128,7 +3153,7 @@
+     }
+ 
+     /** Full list page for a TMDB row / media card (renderPage scaffold + 3-col grid). */
+-    private static void showTmdbListPage(
++    private void showTmdbListPage(
+             MainActivity a, Cms.Site site, String title, TmdbRow row) {
+         a.renderPage(title, "TMDB · " + (site == null ? "" : site.name));
+         CatalogScreen.addBack(a, "tmdb-list-back");
+@@ -3152,7 +3177,7 @@
+     }
+ 
+     /** Fill a 3-column grid with TMDB list-page cards (initial render + live refresh share it). */
+-    private static void fillTmdbListGrid(
++    private void fillTmdbListGrid(
+             MainActivity a, Cms.Site site, LinearLayout listGrid, List<Cms.Video> videos) {
+         LinearLayout cards = null;
+         for (int i = 0; i < videos.size(); i++) {
+@@ -3178,7 +3203,7 @@
+             ImageView img = new ImageView(a);
+             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+             art.addView(img, new FrameLayout.LayoutParams(-1, -1));
+-            if (v.poster != null && !v.poster.isEmpty()) a.poster(v.poster, img);
++            bindReliablePoster(img, v);
+             // 2.0.40: year bottom-left on the poster (the subtitle below
+             // keeps showing year + remarks as before).
+             addPosterOverlay(a, art, v.remarks, v.year);
+@@ -3320,8 +3345,7 @@
+         ImageView img = new ImageView(a);
+         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+         art.addView(img, new FrameLayout.LayoutParams(-1, -1));
+-        if (v.poster != null && !v.poster.isEmpty()) a.poster(v.poster, img);
+-        else maybeEnrichPoster(img, v);
++        bindReliablePoster(img, v);
+         // 2.0.40: year bottom-left + remarks badge bottom-right.
+         addPosterOverlay(a, art, v.remarks, v.year);
+         card.addView(art, new LinearLayout.LayoutParams(-1, a.dp(posterHeightDp)));
+@@ -3357,6 +3381,18 @@
+      * per (source, title) per session; failures are remembered so a
+      * dead source is not retried on every re-render.
+      */
++    private void bindReliablePoster(final ImageView img, final Cms.Video v) {
++        img.setImageDrawable(new PosterPlaceholder(v.title));
++        img.setContentDescription(v.title + " 封面");
++        if (v.poster == null || v.poster.isEmpty() || ImageLoader.failed(v.poster)) {
++            maybeEnrichPoster(img, v);
++            return;
++        }
++        ImageLoader.onFailure(img, () -> maybeEnrichPoster(img, v));
++        a.poster(v.poster, img);
++    }
++
++    private final java.util.Map<String, java.util.concurrent.Future<?>> enrichingPosters = new java.util.HashMap<>();
+     private void maybeEnrichPoster(final ImageView img, final Cms.Video v) {
+         if (img == null || v == null || v.title == null || v.title.isEmpty()) return;
+         final String title = v.title;
+@@ -3364,6 +3400,9 @@
+         final String sourceApi = v.sourceApi;
+         img.setTag("tmdb-poster:" + title);
+         registerPosterWaiter(title, img);
++        final String enrichKey = title + "\n" + sourceApi;
++        java.util.concurrent.Future<?> ongoing = enrichingPosters.get(enrichKey);
++        if (ongoing != null && !ongoing.isDone() && !ongoing.isCancelled()) return;
+         // mkoai 2.0.48: runs on the artwork pool, NOT submitPage. A
+         // navigation (cancelPageRequests + generation++) must never
+         // kill a poster fetch, and delivery below is generation-free
+@@ -3373,7 +3412,7 @@
+         // cancelled every pending fetch and the generation guard then
+         // dropped the completions — while resume() re-attached the
+         // retained home without ever re-running enrichment.
+-        RequestScope.submit(
++        java.util.concurrent.Future<?> job = RequestScope.submit(
+                 a.artwork,
+                 () -> {
+                     try {
+@@ -3382,7 +3421,7 @@
+                             String cached =
+                                     AwwratedHome.posterFor(
+                                             a.getFilesDir(), sourceApi, title);
+-                            if (cached != null && !cached.isEmpty()) {
++                            if (cached != null && !cached.isEmpty() && !ImageLoader.failed(cached)) {
+                                 deliverPoster(v, title, cached);
+                                 return;
+                             }
+@@ -3407,7 +3446,7 @@
+                                         fetchSourcePosterLiveResult(liveApi, title);
+                                 if (live != null
+                                         && live.poster != null
+-                                        && !live.poster.isEmpty()) {
++                                        && !live.poster.isEmpty() && !ImageLoader.failed(live.poster)) {
+                                     deliverPoster(v, title, live.poster);
+                                     return;
+                                 }
+@@ -3423,12 +3462,12 @@
+                                 TmdbClient.search(a.getFilesDir(), title, year);
+                         if (hit != null
+                                 && hit.poster != null
+-                                && !hit.poster.isEmpty()) {
++                                && !hit.poster.isEmpty() && !ImageLoader.failed(hit.poster)) {
+                             deliverPoster(v, title, hit.poster);
+                             return;
+                         }
+                         String douban = AwwratedHome.fetchDoubanPoster(title, year);
+-                        if (douban != null && !douban.isEmpty()) {
++                        if (douban != null && !douban.isEmpty() && !ImageLoader.failed(douban)) {
+                             deliverPoster(v, title, douban);
+                             return;
+                         }
+@@ -3440,6 +3479,7 @@
+                     } catch (Throwable ignored) {
+                     }
+                 });
++        enrichingPosters.put(enrichKey, job);
+     }
+ 
+     /**
+@@ -3525,8 +3565,8 @@
+      * not drop it (2.0.47's gen guard did exactly that).
+      */
+     private void deliverPoster(final Cms.Video v, final String title, final String poster) {
+-        if (poster == null || poster.isEmpty()) return;
+-        if (v != null && (v.poster == null || v.poster.isEmpty())) v.poster = poster;
++        if (poster == null || poster.isEmpty() || ImageLoader.failed(poster)) return;
++        if (v != null) v.poster = poster;
+         if (v != null && v.sourceApi != null && !v.sourceApi.isEmpty()) {
+             AwwratedHome.recordPoster(a.getFilesDir(), v.sourceApi, title, poster);
+         }
+@@ -3549,6 +3589,7 @@
+                             continue;
+                         }
+                         if (!("tmdb-poster:" + title).equals(img.getTag())) continue;
++                        if (v != null) ImageLoader.onFailure(img, () -> maybeEnrichPoster(img, v));
+                         a.poster(poster, img);
+                     }
+                 });
+@@ -3589,8 +3630,7 @@
+             ImageView img = new ImageView(a);
+             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+             art.addView(img, new FrameLayout.LayoutParams(-1, -1));
+-            if (v.poster != null && !v.poster.isEmpty()) a.poster(v.poster, img);
+-            else maybeEnrichPoster(img, v);
++            bindReliablePoster(img, v);
+ 
+             // 2.0.40: year bottom-left + remarks badge bottom-right.
+             addPosterOverlay(a, art, v.remarks, v.year);
+@@ -4287,7 +4327,7 @@
+                             a.prefs.getBoolean(Prefs.YOUTH_MODE, false);
+                     for (Cms.Site s : SourcePreferences.prioritized(a, a.config.sites)) {
+                         if (a.available(s) && s.searchable) {
+-                            if (youthOn && SearchVariants.isAdultSource(s)) continue;
++                            if (!a.available(s) || (youthOn && SearchVariants.isAdultSource(s))) continue;
+                             searchableSites.add(s);
+                         }
+                     }
+@@ -4582,7 +4622,8 @@
+         LinearLayout.LayoutParams posterLp = new LinearLayout.LayoutParams(a.dp(60), a.dp(86));
+         posterLp.rightMargin = a.dp(12);
+         row.addView(poster, posterLp);
+-        if (v.poster != null && !v.poster.isEmpty()) a.poster(v.poster, poster);
++        if (v.sourceApi == null || v.sourceApi.isEmpty()) v.sourceApi = site.api;
++        bindReliablePoster(poster, v);
+ 
+         LinearLayout info = a.vertical();
+         row.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+@@ -7085,6 +7126,16 @@
+                 RectF outer = new RectF(cx - r2, cy - r2, cx + r2, cy + r2);
+                 c.drawArc(outer, -52, 104, false, paint);
+                 c.drawArc(outer, 128, 104, false, paint);
++            } else if (kind == 5) {
++                paint.setStyle(Paint.Style.STROKE);
++                paint.setStrokeWidth(a.dp(1.8f));
++                paint.setStrokeCap(Paint.Cap.ROUND);
++                float radius = Math.min(w, h) * 0.34f;
++                c.drawArc(new RectF(cx-radius, cy-radius, cx+radius, cy+radius), -60, 300, false, paint);
++                c.drawLine(cx-radius, cy-radius*0.45f, cx-radius, cy-radius*0.95f, paint);
++                c.drawLine(cx-radius, cy-radius*0.45f, cx-radius*0.48f, cy-radius*0.45f, paint);
++                c.drawLine(cx, cy, cx, cy-radius*0.52f, paint);
++                c.drawLine(cx, cy, cx+radius*0.43f, cy+radius*0.22f, paint);
+             } else if (kind == 3) {
+                 // iPhone `square_favorites_alt` (rounded square card with heart/lines)
+                 paint.setStyle(Paint.Style.STROKE);
+--- a/android/src/main/java/app/mkoai/player/PlaybackControls.java
++++ b/android/src/main/java/app/mkoai/player/PlaybackControls.java
+@@ -281,6 +281,11 @@
+             registerHiddenAction("aspect", this::aspect);
+             registerHiddenAction("subtitles", () -> tracks(3));
+         } else {
++            if (!a.isTvDevice()) add(row, a.playing ? "Ⅱ" : "▶", "play-pause", () -> {
++                a.togglePlayback();
++                refreshPlayPauseGlyph();
++                a.scheduleHide();
++            });
+             add(
+                     row,
+                     live ? "⏮" : "⏮",
+@@ -440,6 +445,7 @@
+         Button pp = buttons.get("play-pause");
+         if (pp != null) {
+             pp.setContentDescription(a.playing ? "暫停" : "播放");
++            if (!modernTv) pp.setText(a.playing ? "Ⅱ" : "▶");
+             pp.invalidate();
+         }
+     }
+@@ -693,6 +699,8 @@
+         java.util.Set<String> netflixKeys = new java.util.HashSet<>();
+         java.util.Collections.addAll(
+                 netflixKeys,
++                "play-pause",
++                "fullscreen-tool",
+                 "next-episode",
+                 "episodes",
+                 "lines",
+@@ -975,6 +983,28 @@
+         }
+     }
+ 
++    private static String controlLabel(String key, String fallback) {
++        switch (key) {
++            case "play-pause": return "播放或暫停";
++            case "prev-episode": return "上一集";
++            case "next-episode": return "下一集";
++            case "episodes": return "選擇集數";
++            case "lines": return "切換播放線路";
++            case "speed": return "播放速度";
++            case "quality": return "畫質";
++            case "aspect": return "畫面比例";
++            case "subtitles": return "字幕";
++            case "fullscreen-tool": return "切換全螢幕";
++            case "audio-tracks": return "音軌";
++            case "decoder": return "播放核心";
++            case "skip-intro-tool": return "跳過片頭";
++            case "skip-outro-tool": return "跳過片尾";
++            case "repeat-tool": return "重複播放";
++            case "more": return "更多播放設定";
++            default: return fallback;
++        }
++    }
++
+     Button add(LinearLayout row, String title, String key, Runnable action) {
+         Button b =
+                 a.button(
+@@ -984,6 +1014,7 @@
+                             menuAnchor = buttons.get(key);
+                             action.run();
+                         });
++        b.setContentDescription(controlLabel(key, title));
+         b.setSingleLine(true);
+         b.setEllipsize(android.text.TextUtils.TruncateAt.END);
+         b.setTextSize(a.isTvDevice() ? 12.5f : 13f);
+--- a/android/src/main/java/app/mkoai/player/PlayerChrome.java
++++ b/android/src/main/java/app/mkoai/player/PlayerChrome.java
+@@ -186,7 +186,7 @@
+                             GradientDrawable.Orientation.TOP_BOTTOM,
+                             new int[] {modernTv ? 0x8c000000 : 0xc4000000, 0x00000000}));
+         } else {
+-            topShade.setBackgroundColor(Color.TRANSPARENT);
++            topShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0x99000000,0x00000000}));
+         }
+         float u = modernUnit(a);
+         overlay.addView(
+@@ -199,7 +199,7 @@
+                             GradientDrawable.Orientation.BOTTOM_TOP,
+                             new int[] {modernTv ? 0x84000000 : 0xb8000000, 0x00000000}));
+         } else {
+-            bottomShade.setBackgroundColor(Color.TRANSPARENT);
++            bottomShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[] {0xb8000000,0x00000000}));
+         }
+         overlay.addView(
+                 bottomShade,
+@@ -213,7 +213,7 @@
+             backBtn = a.navButton("‹ 返回", "player-back", a::leavePlayback);
+             backBtn.setTextColor(MainActivity.WHITE);
+             backBtn.setBackground(chromeSurface(0xcc22222a, 17, 0x33ffffff));
+-            topActions.addView(backBtn, new LinearLayout.LayoutParams(-2, a.dp(34)));
++            topActions.addView(backBtn, new LinearLayout.LayoutParams(-2, a.dp(48)));
+             View spacer = new View(a);
+             topActions.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
+             // Orientation toggle lives only on the progress row ("全屏横屏 / 退出全屏").
+--- a/android/src/main/java/app/mkoai/player/PosterPlaceholder.java
++++ b/android/src/main/java/app/mkoai/player/PosterPlaceholder.java
+@@ -0,0 +1,21 @@
++package app.mkoai.player;
++
++/** Readable artwork fallback; never substitutes another programme's cover. */
++final class PosterPlaceholder extends android.graphics.drawable.Drawable {
++    private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
++    private final String title;
++    PosterPlaceholder(String title) { this.title = title == null ? "" : title; }
++    @Override public void draw(android.graphics.Canvas canvas) {
++        android.graphics.Rect b = getBounds();
++        paint.setColor(0xff202823); canvas.drawRect(b, paint);
++        paint.setColor(0xffa7b5ae); paint.setTextAlign(android.graphics.Paint.Align.CENTER);
++        paint.setTextSize(Math.max(12, Math.min(b.width()/12f, b.height()/12f)));
++        String label = title.length() > 11 ? title.substring(0, 10) + "…" : title;
++        canvas.drawText(label, b.exactCenterX(), b.exactCenterY(), paint);
++        paint.setTextSize(paint.getTextSize()*0.8f);
++        canvas.drawText("暫無封面", b.exactCenterX(), b.exactCenterY()+paint.getTextSize()*1.8f, paint);
++    }
++    @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
++    @Override public void setColorFilter(android.graphics.ColorFilter filter) { paint.setColorFilter(filter); }
++    @Override public int getOpacity() { return android.graphics.PixelFormat.OPAQUE; }
++}
+--- a/android/src/main/java/app/mkoai/player/SupabaseSync.java
++++ b/android/src/main/java/app/mkoai/player/SupabaseSync.java
+@@ -26,7 +26,7 @@
+  * {@code supabase-schema-mkoai.sql} once before sync works.
+  *
+  * <p>Merge rule (history): furthest-wins — the larger position wins per title+episode.
+- * History rows carry NO source: the cloud key is (user_id, "", "k"+SHA-256 of the
++ * History rows carry NO source: the cloud key uses user_id, deletion generation, and SHA-256 of the
+  * title+episode sync key), so the same episode watched on different sources (or
+  * different devices) merges into one row. Local records keep their own site/id/line;
+  * only progress/time is taken from remote. Watchlist: union. Settings:
+@@ -50,13 +50,17 @@
+ 
+     // ---------- low-level PostgREST ----------
+ 
++    private static String request(Context c, String method, String path, String body, boolean needAuth) throws Exception {
++        return request(c, method, path, body, needAuth, "resolution=merge-duplicates,return=minimal");
++    }
+     private static String request(
+-            Context c, String method, String path, String body, boolean needAuth)
++            Context c, String method, String path, String body, boolean needAuth, String preference)
+             throws Exception {
+         String token = needAuth ? SupabaseAuth.validAccessToken(c) : null;
+         if (needAuth && token == null) throw new IllegalStateException("not signed in");
+         URL url = new URL(REST + path);
+         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
++        try {
+         conn.setRequestMethod(method);
+         conn.setConnectTimeout(15000);
+         conn.setReadTimeout(20000);
+@@ -66,7 +70,7 @@
+         conn.setRequestProperty("Accept", "application/json");
+         if ("POST".equals(method) || "PATCH".equals(method)) {
+             conn.setDoOutput(true);
+-            conn.setRequestProperty("Prefer", "resolution=merge-duplicates,return=minimal");
++            conn.setRequestProperty("Prefer", preference);
+         }
+         if (body != null) {
+             try (OutputStream os = conn.getOutputStream()) {
+@@ -87,12 +91,83 @@
+         } catch (Exception ignored) {
+         }
+         throw new RuntimeException("HTTP " + code + " " + method + " " + path + " " + err);
++        } finally { conn.disconnect(); }
++    }
++
++    private static String clearKey(Context c) {
++        String uid = SupabaseAuth.userId(c);
++        return "history_clear_" + (uid == null ? "local" : uid);
++    }
++    private static long clearedAt(Context c) {
++        return SupabaseAuth.prefs(c).getLong(clearKey(c), 0);
++    }
++    private static long parseUtc(String ts) throws Exception { return HistoryClearPolicy.parseUtc(ts); }
++    private static String utc(long ms) { return HistoryClearPolicy.utc(ms); }
++    private static final Object HISTORY_LOCK = new Object();
++    static void clearHistory(Context c) {
++        // Persist immediately, including offline clears; every merge and upload observes this barrier.
++        long mark = System.currentTimeMillis();
++        synchronized (HISTORY_LOCK) {
++            SupabaseAuth.prefs(c).edit().putLong(clearKey(c), mark)
++                    .putBoolean(clearKey(c) + "_pending", true).remove(Prefs.WATCH_HISTORY).apply();
++        }
++        scheduleUpload(c);
++    }
++    private static void flushHistoryClear(Context c, String uid) throws Exception {
++        android.content.SharedPreferences p = SupabaseAuth.prefs(c);
++        String key = clearKey(c);
++        if (!p.getBoolean(key + "_pending", false)) return;
++        long mark = p.getLong(key, 0);
++        // An empty-title sentinel uses the existing schema and propagates deletion to other devices.
++        JSONObject row = new JSONObject().put("user_id", uid).put("site", "")
++                .put("video_id", "__history_clear__").put("title", "").put("episode", "")
++                .put("position", 0).put("duration", 0).put("poster", "").put("updated_at", utc(mark));
++        String owner = "user_id=eq." + URLEncoder.encode(uid, "UTF-8");
++        // Insert-if-absent, then advance monotonically: an older offline clear cannot overwrite a newer one.
++        request(c, "POST", HISTORY_TABLE + "?on_conflict=user_id,site,video_id", new JSONArray().put(row).toString(), true,
++                "resolution=ignore-duplicates,return=minimal");
++        String sentinel = HISTORY_TABLE + "?" + owner + "&site=eq.&video_id=eq.__history_clear__";
++        request(c, "PATCH", sentinel + "&updated_at=lt." + URLEncoder.encode(utc(mark), "UTF-8"),
++                new JSONObject().put("updated_at", utc(mark)).toString(), true);
++        JSONArray confirmed = new JSONArray(request(c, "GET", sentinel + "&select=*", null, true));
++        if (confirmed.length() > 0) mark = Math.max(mark, historyFromRow(confirmed.getJSONObject(0)).updated);
++        synchronized (HISTORY_LOCK) {
++            if (mark > p.getLong(key, 0)) p.edit().putLong(key, mark).apply();
++        }
++        // Generation filtering also rejects malformed future timestamps written by older releases.
++        // Keep newer clear generations if another device clears while this request is in flight.
++        String generation = HistoryClearPolicy.generation(mark);
++        request(c, "DELETE", HISTORY_TABLE + "?" + owner
++                + "&video_id=neq.__history_clear__&or=(site.not.like.__history_generation__*,site.lt."
++                + generation + ")", null, true);
++        if (p.getLong(key, 0) == mark) p.edit().putBoolean(key + "_pending", false).apply();
++    }
++    private static List<WatchHistory.Entry> afterClear(Context c, List<WatchHistory.Entry> rows) {
++        long mark = clearedAt(c);
++        List<WatchHistory.Entry> out = new ArrayList<>();
++        for (WatchHistory.Entry e : rows) if (HistoryClearPolicy.localTime(e.updated, mark, System.currentTimeMillis())) out.add(e);
++        return out;
++    }
++
++    private static List<WatchHistory.Entry> remoteForGeneration(Context c, List<WatchHistory.Entry> rows) {
++        List<WatchHistory.Entry> out = new ArrayList<>();
++        long mark = clearedAt(c);
++        for (WatchHistory.Entry e : rows) if (HistoryClearPolicy.remoteGeneration(e.site, mark)) out.add(e);
++        return afterClear(c, out);
++    }
++    private static List<WatchHistory.Entry> mergeRemoteHistory(Context c, List<WatchHistory.Entry> remote) {
++        synchronized (HISTORY_LOCK) {
++            // Re-read local state under the deletion lock; never commit a pre-clear local snapshot.
++            List<WatchHistory.Entry> merged = mergeHistory(readLocalHistory(c), remoteForGeneration(c, remote));
++            writeLocalHistory(c, merged);
++            return merged;
++        }
+     }
+ 
+     // ---------- history (source-free: keyed by title + episode) ----------
+ 
+     /**
+-     * 2.0.43: the cloud identity of a history row is NOT its source. site is always ""
++     * 2.0.43: the cloud identity of a history row is NOT its source. site is source-free (empty before a clear, deletion-generation metadata afterwards)
+      * and video_id is "k" + the first 32 hex chars of the SHA-256 of
+      * {@link WatchHistory#syncKey} (normalized title + "\n" + normalized episode), so the
+      * same title+episode from any source or device lands on the same row and the
+@@ -114,19 +189,17 @@
+      * never sent — they do not carry across devices. The original site/video_id are
+      * not sent either; the local record keeps them untouched.
+      */
+-    private static JSONObject historyRow(String uid, WatchHistory.Entry e) throws Exception {
++    private static JSONObject historyRow(Context c, String uid, WatchHistory.Entry e) throws Exception {
+         return new JSONObject()
+                 .put("user_id", uid)
+-                .put("site", "")
++                .put("site", HistoryClearPolicy.generation(clearedAt(c)))
+                 .put("video_id", syncVideoId(e))
+                 .put("episode", e.episode == null ? "" : e.episode)
+                 .put("position", e.position)
+                 .put("duration", e.duration)
+                 .put("title", e.title == null ? "" : e.title)
+                 .put("poster", e.poster == null ? "" : e.poster)
+-                .put("updated_at", new java.text.SimpleDateFormat(
+-                                "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+-                        .format(new java.util.Date(e.updated == 0 ? System.currentTimeMillis() : e.updated)));
++                .put("updated_at", utc(e.updated == 0 ? System.currentTimeMillis() : e.updated));
+     }
+ 
+     private static WatchHistory.Entry historyFromRow(JSONObject o) {
+@@ -145,10 +218,7 @@
+             String ts = o.optString("updated_at");
+             if (!ts.isEmpty()) {
+                 e.updated =
+-                        new java.text.SimpleDateFormat(
+-                                        "yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+-                                .parse(ts.replace("Z", "").substring(0, 19))
+-                                .getTime();
++                        parseUtc(ts);
+             }
+         } catch (Exception ignored) {
+         }
+@@ -157,6 +227,8 @@
+ 
+     private static void uploadHistory(Context c, String uid, List<WatchHistory.Entry> local)
+             throws Exception {
++        flushHistoryClear(c, uid);
++        local = readLocalHistory(c);
+         // 2.0.43: untitled entries have no stable source-free key — never upload them.
+         // Collapse same title+episode duplicates to one row (furthest-wins), so one
+         // POST never carries two rows with the same (user_id, "", video_id).
+@@ -173,7 +245,7 @@
+         }
+         if (byId.isEmpty()) return;
+         JSONArray rows = new JSONArray();
+-        for (WatchHistory.Entry e : byId.values()) rows.put(historyRow(uid, e));
++        for (WatchHistory.Entry e : byId.values()) rows.put(historyRow(c, uid, e));
+         request(
+                 c,
+                 "POST",
+@@ -188,6 +260,19 @@
+      * Rows with an empty title are dropped: they have no stable key.
+      */
+     private static List<WatchHistory.Entry> downloadHistory(Context c) throws Exception {
++        // The deletion marker must not fall out of the paginated history window after 200 new episodes.
++        String uid = SupabaseAuth.userId(c);
++        if (uid != null) {
++            JSONArray markers = new JSONArray(request(c, "GET", HISTORY_TABLE
++                    + "?user_id=eq." + URLEncoder.encode(uid, "UTF-8")
++                    + "&site=eq.&video_id=eq.__history_clear__&select=*", null, true));
++            if (markers.length() > 0) {
++                long remoteMark = historyFromRow(markers.getJSONObject(0)).updated;
++                synchronized (HISTORY_LOCK) {
++                    if (remoteMark > clearedAt(c)) SupabaseAuth.prefs(c).edit().putLong(clearKey(c), remoteMark).apply();
++                }
++            }
++        }
+         String resp =
+                 request(
+                         c,
+@@ -201,10 +286,17 @@
+             JSONObject o = a.optJSONObject(i);
+             if (o == null) continue;
+             WatchHistory.Entry e = historyFromRow(o);
++            if ("__history_clear__".equals(o.optString("video_id"))) {
++                synchronized (HISTORY_LOCK) {
++                    long mark = Math.max(clearedAt(c), e.updated);
++                    SupabaseAuth.prefs(c).edit().putLong(clearKey(c), mark).apply();
++                }
++                continue;
++            }
+             if (e.title == null || e.title.trim().isEmpty()) continue;
+             out.add(e);
+         }
+-        return out;
++        return remoteForGeneration(c, out);
+     }
+ 
+     /**
+@@ -400,7 +492,7 @@
+ 
+     static List<WatchHistory.Entry> readLocalHistory(Context c) {
+         SharedPreferences p = SupabaseAuth.prefs(c);
+-        return WatchHistory.read(p.getString(Prefs.WATCH_HISTORY, "[]"));
++        return afterClear(c, WatchHistory.read(p.getString(Prefs.WATCH_HISTORY, "[]")));
+     }
+ 
+     static List<Favorites.Entry> readLocalWatchlist(Context c) {
+@@ -409,6 +501,8 @@
+     }
+ 
+     private static void writeLocalHistory(Context c, List<WatchHistory.Entry> list) {
++        synchronized (HISTORY_LOCK) {
++        list = afterClear(c, list);
+         JSONArray a = new JSONArray();
+         for (int i = 0; i < Math.min(WatchHistory.LIMIT, list.size()); i++) {
+             try {
+@@ -421,6 +515,7 @@
+             SupabaseAuth.prefs(c).edit().putString(Prefs.WATCH_HISTORY, a.toString()).apply();
+         } finally {
+             applyingRemote = false;
++        }
+         }
+     }
+ 
+@@ -450,10 +545,9 @@
+         try {
+             SharedPreferences prefs = SupabaseAuth.prefs(c);
+             // Download + merge.
++            flushHistoryClear(c, uid);
+             List<WatchHistory.Entry> remoteHistory = downloadHistory(c);
+-            List<WatchHistory.Entry> mergedHistory =
+-                    mergeHistory(readLocalHistory(c), remoteHistory);
+-            writeLocalHistory(c, mergedHistory);
++            List<WatchHistory.Entry> mergedHistory = mergeRemoteHistory(c, remoteHistory);
+             List<Favorites.Entry> remoteList = downloadWatchlist(c);
+             List<Favorites.Entry> mergedList = mergeWatchlist(readLocalWatchlist(c), remoteList);
+             writeLocalWatchlist(c, mergedList);
+@@ -566,9 +660,10 @@
+      * throttle knows a fresh download just happened.
+      */
+     private static void downloadAndMerge(Context c) throws Exception {
++        String uid = SupabaseAuth.userId(c);
++        if (uid != null) flushHistoryClear(c, uid);
+         List<WatchHistory.Entry> remote = downloadHistory(c);
+-        List<WatchHistory.Entry> merged = mergeHistory(readLocalHistory(c), remote);
+-        writeLocalHistory(c, merged);
++        mergeRemoteHistory(c, remote);
+         List<Favorites.Entry> remoteList = downloadWatchlist(c);
+         List<Favorites.Entry> mergedList = mergeWatchlist(readLocalWatchlist(c), remoteList);
+         writeLocalWatchlist(c, mergedList);
+--- a/android/src/main/java/app/mkoai/player/TmdbClient.java
++++ b/android/src/main/java/app/mkoai/player/TmdbClient.java
+@@ -118,7 +118,9 @@
+             if (wait > 0) {
+                 try {
+                     LOCK.wait(wait);
+-                } catch (InterruptedException ignored) {
++                } catch (InterruptedException cancelled) {
++                    Thread.currentThread().interrupt();
++                    throw new java.io.InterruptedIOException("metadata cancelled");
+                 }
+             }
+             lastCallMs = System.currentTimeMillis();
+@@ -152,12 +154,12 @@
+ 
+     // ---- disk cache (modeled on AwwratedHome's availability cache) ----
+ 
+-    private static JSONObject loadCache(File filesDir) {
++    private static synchronized JSONObject loadCache(File filesDir) {
+         JSONObject out = new JSONObject();
+         if (filesDir == null) return out;
+         try {
+             File f = new File(filesDir, CACHE_FILE);
+-            if (!f.exists()) return out;
++            if (!f.exists() || f.length() <= 0 || f.length() > 8L*1024*1024) return out;
+             byte[] buf = new byte[(int) f.length()];
+             try (FileInputStream in = new FileInputStream(f)) {
+                 int read = 0;
+@@ -173,13 +175,16 @@
+         }
+     }
+ 
+-    private static void saveCache(File filesDir, JSONObject cache) {
++    private static synchronized void saveCache(File filesDir, JSONObject cache) {
+         if (filesDir == null || cache == null) return;
+         try {
+-            try (FileOutputStream out =
+-                    new FileOutputStream(new File(filesDir, CACHE_FILE))) {
+-                out.write(cache.toString().getBytes("UTF-8"));
+-            }
++            JSONObject merged = MetadataCachePolicy.merge(loadCache(filesDir), cache);
++            File target = new File(filesDir, CACHE_FILE);
++            File temp = new File(filesDir, CACHE_FILE + ".tmp");
++            try (FileOutputStream out = new FileOutputStream(temp)) {
++                out.write(merged.toString().getBytes("UTF-8"));
++            }
++            if (!temp.renameTo(target)) temp.delete();
+         } catch (Throwable ignored) {
+         }
+     }
+--- a/android/tests/HistoryClearChecks.java
++++ b/android/tests/HistoryClearChecks.java
+@@ -0,0 +1,36 @@
++package app.mkoai.player;
++
++public final class HistoryClearChecks {
++    private static int count;
++    private static void check(boolean ok, String name) {
++        if (!ok) throw new AssertionError(name);
++        count++; System.out.println("PASS " + name);
++    }
++    public static void main(String[] args) throws Exception {
++        long t = 1763096400123L;
++        check(HistoryClearPolicy.keep(0,0), "legacy rows kept before any clear");
++        check(!HistoryClearPolicy.keep(t-1,t), "old remote row excluded");
++        check(!HistoryClearPolicy.keep(t,t), "clear boundary excluded");
++        check(HistoryClearPolicy.keep(t+1,t), "new viewing survives clear");
++        check(HistoryClearPolicy.parseUtc(HistoryClearPolicy.utc(t)) == t, "milliseconds round trip");
++        java.util.TimeZone old = java.util.TimeZone.getDefault();
++        try {
++            for (String zone : new String[]{"Asia/Taipei", "America/New_York", "UTC"}) {
++                java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(zone));
++                check(HistoryClearPolicy.parseUtc(HistoryClearPolicy.utc(t)) == t, "timezone independent " + zone);
++            }
++        } finally { java.util.TimeZone.setDefault(old); }
++        check(HistoryClearPolicy.parseUtc("2026-11-14T00:00:00.123456+00:00") == HistoryClearPolicy.parseUtc("2026-11-14T00:00:00.123Z"), "PostgREST microseconds truncated safely");
++        check(HistoryClearPolicy.parseUtc("2026-11-14T08:00:00+08:00") == HistoryClearPolicy.parseUtc("2026-11-14T00:00:00Z"), "explicit UTC offset");
++        check(HistoryClearPolicy.parseUtc("2026-11-13T19:00:00-05:00") == HistoryClearPolicy.parseUtc("2026-11-14T00:00:00Z"), "negative UTC offset");
++        check(HistoryClearPolicy.remoteGeneration("old-source", 0), "legacy histories accepted before any clear");
++        check(!HistoryClearPolicy.remoteGeneration("", t), "old source-free row rejected after clear even with future timestamp");
++        check(!HistoryClearPolicy.remoteGeneration("old-source", t), "old source-bound row rejected after clear");
++        check(HistoryClearPolicy.remoteGeneration(HistoryClearPolicy.generation(t), t), "current clear generation accepted");
++        check(!HistoryClearPolicy.remoteGeneration(HistoryClearPolicy.generation(t-1), t), "older clear generation rejected");
++        check(HistoryClearPolicy.generation(t+1).compareTo(HistoryClearPolicy.generation(t)) > 0, "generation ordering preserves a newer concurrent clear");
++        check(!HistoryClearPolicy.localTime(t+8*3600000L,t,t), "legacy timezone-shifted future row cannot bypass clear");
++        check(HistoryClearPolicy.localTime(t+1,t,t+1), "fresh local progress retained after clear");
++        System.out.println(count + " history deletion checks passed");
++    }
++}
+--- a/android/tests/HomeAvailabilityChecks.java
++++ b/android/tests/HomeAvailabilityChecks.java
+@@ -0,0 +1,69 @@
++package app.mkoai.player;
++import java.util.*;
++import java.io.*;
++import java.nio.file.*;
++import org.json.*;
++public final class HomeAvailabilityChecks {
++ static int checks;
++ static void check(boolean b,String name) { if(!b)throw new AssertionError(name); checks++;System.out.println("PASS "+name); }
++ static Cms.Video video() { Cms.Video v=new Cms.Video();v.title="艾倫的宇宙";v.id="msearch:艾倫的宇宙";return v; }
++ static void cache(File dir,String region,long ts) throws Exception {
++  JSONObject entry=new JSONObject().put("r",region).put("ts",ts).put("id","real-42").put("po","https://example.test/cover.jpg");
++  JSONObject disk=new JSONObject().put("https://source.test/api",new JSONObject().put("艾倫的宇宙",entry));
++  Files.write(new File(dir,"awwrated-availability-v3.json").toPath(),disk.toString().getBytes("UTF-8"));
++ }
++ public static void main(String[] args) throws Exception {
++  File dir=Files.createTempDirectory("mkoai-home-test").toFile();
++  List<String> keys=Collections.singletonList("https://source.test/api");
++  List<Cms.Video> input=Collections.singletonList(video());
++  check(AwwratedHome.prefilterVisibleDiskCross(input,keys,dir).isEmpty(),"unknown recommendation hidden");
++  check(AwwratedHome.prefilterVisibleDiskCross(input,Collections.emptyList(),dir).isEmpty(),"no sources means no recommendations");
++  cache(dir,"TW",System.currentTimeMillis());
++  List<Cms.Video> found=AwwratedHome.prefilterVisibleDiskCross(Collections.singletonList(video()),keys,dir);
++  check(found.size()==1,"confirmed source title visible");
++  check("real-42".equals(found.get(0).id),"card uses real source detail ID");
++  check(keys.get(0).equals(found.get(0).sourceApi),"card retains confirming source");
++  check(found.get(0).poster.endsWith("cover.jpg"),"source cover fills missing metadata cover");
++  check(AwwratedHome.prefilterVisibleDiskCross(input,Collections.singletonList("https://different.test/api"),dir).isEmpty(),"removed source cache cannot authorize a card");
++  cache(dir,"TW",System.currentTimeMillis()-90000000L);
++  check(AwwratedHome.prefilterVisibleDiskCross(input,keys,dir).isEmpty(),"expired source confirmation requires recheck");
++  cache(dir,"ABSENT",System.currentTimeMillis());
++  check(AwwratedHome.prefilterVisibleDiskCross(input,keys,dir).isEmpty(),"all absent stays empty without unsafe fallback");
++  cache(dir,"UNKNOWN",System.currentTimeMillis());
++  check(AwwratedHome.prefilterVisibleDiskCross(input,keys,dir).isEmpty(),"timeouts are not confirmation");
++  check(AwwratedHome.applySourceFiltersCross(input,Collections.emptyList(),keys,dir).isEmpty(),"dead engines cannot expose unverified titles");
++  Files.write(new File(dir,"awwrated-availability-v3.json").toPath(),"broken json".getBytes("UTF-8"));
++  check(AwwratedHome.prefilterVisibleDiskCross(input,keys,dir).isEmpty(),"corrupt availability cache fails closed");
++  check(ImageLoader.detailCandidates("https://image.tmdb.org/t/p/w1280/a.jpg","https://image.tmdb.org/t/p/w500/a.jpg",true).length==4,"detail artwork has resolution fallback chain");
++  check(ImageLoader.upgradePosterUrl("https://image.tmdb.org/t/p/w92/a.jpg",false).contains("w780"),"small TMDB artwork upgraded for cards");
++  SourceEngine sparse = new SourceEngine() {
++   public String home(){return "";} public String category(String id,int page){return "";}
++   public boolean requiresExternalRuntime(){return false;}
++   public String search(String keyword,int page){return "{\"list\":[{\"vod_id\":\"42\",\"vod_name\":\"Example\"}]}";}
++   public String detail(String id){return "{\"list\":[{\"vod_id\":\"42\",\"vod_name\":\"Example\",\"vod_pic\":\"https://example.test/detail-cover.jpg\"}]}";}
++  };
++  AwwratedHome.PosterResult enriched=AwwratedHome.fetchPosterLiveResult(sparse,"https://fixture.test/api","Example");
++  check(enriched.poster != null && enriched.poster.endsWith("detail-cover.jpg"),"search without cover falls back to source detail cover");
++  check(!enriched.absent,"present title with detail cover is not marked absent");
++  SourceEngine noCover = new SourceEngine() {
++   public String home(){return "";} public String category(String id,int page){return "";}
++   public boolean requiresExternalRuntime(){return false;}
++   public String search(String keyword,int page){return "{\"list\":[{\"vod_id\":\"43\",\"vod_name\":\"Example\"}]}";}
++   public String detail(String id){return "{\"list\":[{\"vod_id\":\"43\",\"vod_name\":\"Example\"}]}";}
++  };
++  AwwratedHome.PosterResult missing=AwwratedHome.fetchPosterLiveResult(noCover,"https://fixture.test/no-cover","Example");
++  check(missing.poster == null && !missing.absent,"missing artwork never poisons title availability");
++  java.lang.reflect.Field failedField=ImageLoader.class.getDeclaredField("FAILED"); failedField.setAccessible(true);
++  @SuppressWarnings("unchecked") Map<String,Long> failed=(Map<String,Long>)failedField.get(null);
++  String failedUrl="https://fixture.test/recoverable.jpg";
++  failed.put(failedUrl,System.currentTimeMillis());
++  check(ImageLoader.failed(failedUrl),"recent artwork failure backs off");
++  failed.put(failedUrl,System.currentTimeMillis()-60001L);
++  check(!ImageLoader.failed(failedUrl),"temporary artwork failure expires and may recover");
++  check(!failed.containsKey(failedUrl),"expired artwork failure entry is pruned");
++  check(!ImageLoader.failed(null),"null artwork is safe to inspect");
++  try (RandomAccessFile oversized=new RandomAccessFile(new File(dir,"awwrated-availability-v3.json"),"rw")) { oversized.setLength(9L*1024*1024); }
++  check(AwwratedHome.loadAvailDisk(dir).length()==0,"oversized availability cache is rejected before allocation");
++  System.out.println(checks+" home availability and artwork checks passed");
++ }
++}
+--- a/android/tests/MetadataSchedulingChecks.java
++++ b/android/tests/MetadataSchedulingChecks.java
+@@ -0,0 +1,34 @@
++package app.mkoai.player;
++import java.util.*;
++import java.util.concurrent.*;
++import java.util.concurrent.atomic.*;
++import org.json.*;
++public final class MetadataSchedulingChecks {
++ static int n;
++ static void check(boolean b,String name){if(!b)throw new AssertionError(name);n++;System.out.println("PASS "+name);}
++ public static void main(String[] args)throws Exception {
++  AtomicInteger active=new AtomicInteger(),max=new AtomicInteger(); CountDownLatch four=new CountDownLatch(4);
++  List<Callable<Integer>> jobs=new ArrayList<>();
++  for(int i=0;i<12;i++){final int index=i;jobs.add(()->{int current=active.incrementAndGet();max.accumulateAndGet(current,Math::max);four.countDown();try{if(!four.await(2,TimeUnit.SECONDS))throw new AssertionError("no concurrency");return index;}finally{active.decrementAndGet();}});}
++  List<Integer> values=BoundedBatch.run(jobs,20,3000);
++  check(max.get()==4,"metadata concurrency capped at four even when callers request twenty");
++  check(values.size()==12,"every input keeps an output slot");
++  for(int i=0;i<12;i++)check(values.get(i)!=null && values.get(i)==i,"stable category ordering "+i);
++  List<Integer> partial=BoundedBatch.run(Arrays.asList(()->{throw new java.io.IOException("provider failed");},()->7),2,1000);
++  check(partial.get(0)==null && partial.get(1)==7,"one failed provider does not remove successful shelves");
++  CountDownLatch cancelled=new CountDownLatch(1);
++  List<Integer> timed=BoundedBatch.run(Arrays.asList(()->{try{new CountDownLatch(1).await();return 0;}catch(InterruptedException e){cancelled.countDown();throw e;}},()->42),2,150);
++  check(timed.get(0)==null && timed.get(1)==42,"deadline retains fast result while slow provider is cancelled");
++  check(cancelled.await(1,TimeUnit.SECONDS),"timed-out worker receives cancellation");
++  check(BoundedBatch.run(Collections.<Callable<Integer>>emptyList(),4,100).isEmpty(),"empty category list completes immediately");
++  JSONObject latest=new JSONObject().put("lists",new JSONObject().put("newer",new JSONObject().put("ts",200).put("value","new")));
++  JSONObject stale=new JSONObject().put("lists",new JSONObject().put("newer",new JSONObject().put("ts",100).put("value","old")).put("other",new JSONObject().put("ts",150))).put("items",new JSONObject().put("poster",new JSONObject().put("ts",123)));
++  JSONObject merged=MetadataCachePolicy.merge(latest,stale);
++  check("new".equals(merged.getJSONObject("lists").getJSONObject("newer").getString("value")),"late stale writer cannot overwrite fresher metadata");
++  check(merged.getJSONObject("lists").has("other"),"concurrent unrelated category retained");
++  check(merged.getJSONObject("items").has("poster"),"poster searches and category lists both retained");
++  JSONObject replacement=new JSONObject().put("lists",new JSONObject().put("newer",new JSONObject().put("ts",300).put("value","latest")));
++  check("latest".equals(MetadataCachePolicy.merge(merged,replacement).getJSONObject("lists").getJSONObject("newer").getString("value")),"newer metadata replaces old entry");
++  System.out.println(n+" scheduling and cache checks passed");
++ }
++}
+--- a/android/tests/run_mkoai_2050_checks.py
++++ b/android/tests/run_mkoai_2050_checks.py
+@@ -0,0 +1,16 @@
++from pathlib import Path
++import subprocess,os,hashlib
++r=Path(__file__).resolve().parents[2];jar=r/'android/tests/lib/json-20240303.jar'
++assert hashlib.sha256(jar.read_bytes()).hexdigest()=='3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed'
++cp=os.pathsep.join([str(jar),str(r/'android/build/classes'),os.environ.get('MARCOMOVIE_ANDROID_JAR',str(r/'tools/android-35/android.jar'))]+[str(p) for p in (r/'tools/java-dependencies').glob('*.jar')]);out=r/'android/build/mkoai-2050-checks';out.mkdir(exist_ok=True);j=str(Path(os.environ.get('MARCOMOVIE_JDK',os.environ.get('JAVA_HOME','missing-jdk')))/'bin')+os.sep
++tests=['HistoryClearChecks','MetadataSchedulingChecks','GlobalSearchChecks','FavoritesChecks']
++sources=[str(r/'android/tests'/f'{t}.java') for t in tests]+[str(r/'android/tests/HomeAvailabilityChecks.java')]
++subprocess.run([j+'javac','-encoding','UTF-8','-cp',cp,'-d',str(out),*sources],check=True)
++failed=[];log=[]
++for t in ['HomeAvailabilityChecks']+tests:
++ p=subprocess.run([j+'java','-cp',str(out)+os.pathsep+cp,'app.mkoai.player.'+t,str(r)],text=True,capture_output=True,timeout=90)
++ log.append(f'== {t} ==\n'+p.stdout+p.stderr)
++ print(t, 'PASS' if p.returncode==0 else 'FAIL',p.stdout.strip().split('\n')[-1],flush=True)
++ if p.returncode: failed.append(t); print(p.stderr[:500],flush=True)
++r.joinpath('android/build/mkoai-2050-results.txt').write_text('\n'.join(log))
++if failed: raise SystemExit('Failed: '+str(failed))

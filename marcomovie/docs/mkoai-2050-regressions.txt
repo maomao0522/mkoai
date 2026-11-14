@@ -1,0 +1,111 @@
+== HomeAvailabilityChecks ==
+PASS unknown recommendation hidden
+PASS no sources means no recommendations
+PASS confirmed source title visible
+PASS card uses real source detail ID
+PASS card retains confirming source
+PASS source cover fills missing metadata cover
+PASS removed source cache cannot authorize a card
+PASS expired source confirmation requires recheck
+PASS all absent stays empty without unsafe fallback
+PASS timeouts are not confirmation
+PASS dead engines cannot expose unverified titles
+PASS corrupt availability cache fails closed
+PASS detail artwork has resolution fallback chain
+PASS small TMDB artwork upgraded for cards
+PASS search without cover falls back to source detail cover
+PASS present title with detail cover is not marked absent
+PASS missing artwork never poisons title availability
+PASS recent artwork failure backs off
+PASS temporary artwork failure expires and may recover
+PASS expired artwork failure entry is pruned
+PASS null artwork is safe to inspect
+PASS oversized availability cache is rejected before allocation
+22 home availability and artwork checks passed
+
+== HistoryClearChecks ==
+PASS legacy rows kept before any clear
+PASS old remote row excluded
+PASS clear boundary excluded
+PASS new viewing survives clear
+PASS milliseconds round trip
+PASS timezone independent Asia/Taipei
+PASS timezone independent America/New_York
+PASS timezone independent UTC
+PASS PostgREST microseconds truncated safely
+PASS explicit UTC offset
+PASS negative UTC offset
+PASS legacy histories accepted before any clear
+PASS old source-free row rejected after clear even with future timestamp
+PASS old source-bound row rejected after clear
+PASS current clear generation accepted
+PASS older clear generation rejected
+PASS generation ordering preserves a newer concurrent clear
+PASS legacy timezone-shifted future row cannot bypass clear
+PASS fresh local progress retained after clear
+19 history deletion checks passed
+
+== MetadataSchedulingChecks ==
+PASS metadata concurrency capped at four even when callers request twenty
+PASS every input keeps an output slot
+PASS stable category ordering 0
+PASS stable category ordering 1
+PASS stable category ordering 2
+PASS stable category ordering 3
+PASS stable category ordering 4
+PASS stable category ordering 5
+PASS stable category ordering 6
+PASS stable category ordering 7
+PASS stable category ordering 8
+PASS stable category ordering 9
+PASS stable category ordering 10
+PASS stable category ordering 11
+PASS one failed provider does not remove successful shelves
+PASS deadline retains fast result while slow provider is cancelled
+PASS timed-out worker receives cancellation
+PASS empty category list completes immediately
+PASS late stale writer cannot overwrite fresher metadata
+PASS concurrent unrelated category retained
+PASS poster searches and category lists both retained
+PASS newer metadata replaces old entry
+22 scheduling and cache checks passed
+
+== GlobalSearchChecks ==
+PASS catalogue id redirects search by movie title
+PASS cross-search id metadata is skipped
+PASS explicit cross-search title remains preferred
+PASS numeric movie titles remain valid
+PASS missing movie name does not expose metadata id as query
+PASS complete local syllable dictionary loaded
+PASS frequency-ordered simplified Chinese candidate
+PASS remote pinyin selection composes a real Chinese film title
+PASS continuous pinyin preserves remaining syllable after selection
+PASS continuous pinyin can be committed one syllable at a time
+PASS delete removes composition before committed text
+PASS delete removes committed Han character
+PASS delete does not split a surrogate pair
+PASS initial-letter query does not require a Chinese candidate
+PASS number mode appends directly
+PASS v-input supports umlaut-u syllables
+PASS space commits the first pinyin candidate
+PASS space works in literal mode
+PASS bounded query length
+PASS all source outcomes finish despite one slow source
+PASS deduplicates playable results and skips cross-search placeholders
+PASS empty source remains distinct from failure
+PASS source failure remains distinct from empty
+PASS per-source deadline delivers one timeout
+PASS website verification is distinct from empty and generic failure
+PASS cancellation fixture is running
+PASS cancelled native work cannot deliver a stale result
+PASS 100 sources are scheduled without queue-overflow omissions
+PASS all six uninterruptible workers entered
+PASS all six uninterruptible workers reported timeout
+PASS healthy source executes while wedged uninterruptible sources are isolated
+PASS wedged site recovers once call exits
+PASS plugin capacity test reached deadlines
+PASS healthy CMS survives exhausted plugin pool
+OK 34 global search and pinyin checks; no real source playback implied.
+
+== FavoritesChecks ==
+PASS 8 favorite persistence checks

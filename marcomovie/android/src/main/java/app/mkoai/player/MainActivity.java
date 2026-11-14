@@ -1,0 +1,2130 @@
+package app.mkoai.player;
+
+import android.app.*;
+import android.content.*;
+import android.graphics.*;
+import android.graphics.drawable.*;
+import android.media.*;
+import android.net.Uri;
+import android.os.*;
+import android.view.*;
+import android.view.animation.DecelerateInterpolator;
+import android.widget.*;
+import android.util.LruCache;
+import java.io.*;
+import java.net.*;
+import java.util.*;
+import java.util.concurrent.*;
+
+/** Independent first native build. No original APK code or artwork is embedded. */
+public final class MainActivity extends Activity {
+    static final int WHITE = 0xfff5f5f7, MUTED = 0xffa1a1aa, DARK = 0xff141414;
+    /** Maoki 2.5.1 classic accent (coral red) — primary actions, selections, progress. */
+    static final int ACCENT = 0xffe34b58;
+    final Handler ui = new Handler(Looper.getMainLooper());
+    final ExecutorService worker = Executors.newFixedThreadPool(4);
+    final ExecutorService details = Executors.newFixedThreadPool(4);
+    final DetailCache detailCache = new DetailCache();
+    final SingleFlight<String> detailFlights = new SingleFlight<>();
+    Future<?> detailPrefetch;
+    final List<Future<?>> pageRequests = new ArrayList<>();
+    final ExecutorService artwork = Executors.newFixedThreadPool(8);
+    final List<Future<?>> artworkRequests = new ArrayList<>();
+    final ExecutorService phoneticWork = Executors.newSingleThreadExecutor();
+    final LinkedHashSet<String> pendingTitles = new LinkedHashSet<>();
+    final Runnable learnPendingTitles = this::learnPendingTitles;
+
+    void learnPendingTitles() {
+        SourceController.learnPendingTitles(this);
+    }
+
+    UpdateScreen updateScreen;
+    final Runnable automaticUpdate =
+            new Runnable() {
+                public void run() {
+                    if (!foreground) return;
+                    if (current != null && current.home && appDialog == null) {
+                        UpdateManager updates = UpdateManager.get(MainActivity.this);
+                        updates.automatic();
+                        if (updates.consumeNotice()) toast("發現新版，可在設定 → 軟體更新檢視");
+                    }
+                    ui.postDelayed(this, 60000);
+                }
+            };
+    PlaybackLoading playbackLoading;
+    View playbackLoadingFocus;
+    int playbackResolveSerial;
+    GlobalSearchScreen searchScreen;
+    Dialog sourceDialog, accountDialog;
+    MagnetStream magnetStream;
+    static volatile PhoneticSearchIndex sharedPhonetic;
+    volatile PhoneticSearchIndex phonetic;
+    final CountDownLatch phoneticReady = new CountDownLatch(1);
+    ConfigStore configStore;
+    PhoneConfigDialog phoneConfig;
+    TvPushDialog tvPush;
+    PhonePushDialog phonePush;
+    TvLoginDialog tvLogin;
+    PhoneLoginDialog phoneLogin;
+    LiveSession liveSession;
+    final Runnable tuneLiveNumber = this::commitLiveNumber;
+    LocalProxy localProxy;
+    WebResolver webResolver;
+    PlaybackControls playbackControls;
+    Cms.Line activeLine;
+    Cms.Episode activeEpisode;
+    int resumeAt;
+    WatchHistory.Entry playingBookmark;
+    long lastBookmarkSave;
+    final ArrayDeque<Screen> back = new ArrayDeque<>();
+    // 2.0.40: heap-sized (was a fixed 10 MB). A single 1080x1620 detail
+    // bitmap is ~7 MB, so the old cap evicted every card thumbnail the
+    // moment a detail page opened and the home had to re-decode on the way
+    // back. maxMemory/8 (32–96 MB) holds the detail art plus the cards.
+    final LruCache<String, Bitmap> images =
+            new LruCache<String, Bitmap>(imageCacheBytes()) {
+                protected int sizeOf(String k, Bitmap b) {
+                    return b.getByteCount();
+                }
+            };
+
+    private static int imageCacheBytes() {
+        long eighth = Runtime.getRuntime().maxMemory() / 8;
+        long clamped = Math.max(32L * 1024 * 1024, Math.min(96L * 1024 * 1024, eighth));
+        return (int) clamped;
+    }
+    final HomeKeyTracker homeKeys = new HomeKeyTracker();
+    Screen shortcutScreen;
+    StartupIntro startupIntro;
+    boolean introSkipKey;
+    HomeAmbient homeAmbient;
+    HomeDock homeDock;
+    FrameLayout root;
+    LinearLayout body;
+    ScrollView scroll;
+    Screen current;
+    Cms.Config config;
+    android.content.SharedPreferences prefs;
+    boolean privateMode, switchingPrivacy;
+
+    @Override
+    public File getFilesDir() {
+        File base = super.getFilesDir();
+        if (!privateMode) return base;
+        File scoped = new File(base, "private-space");
+        scoped.mkdirs();
+        return scoped;
+    }
+
+    @Override
+    public File getCacheDir() {
+        File base = super.getCacheDir();
+        if (!privateMode) return base;
+        File scoped = new File(base, "private-space");
+        scoped.mkdirs();
+        return scoped;
+    }
+
+    @Override
+    public int checkSelfPermission(String permission) {
+        if (CspEngine.isStoragePermission(permission)) {
+            return android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+        return super.checkSelfPermission(permission);
+    }
+
+    @Override
+    public int checkPermission(String permission, int pid, int uid) {
+        if (CspEngine.isStoragePermission(permission)) {
+            return android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+        return super.checkPermission(permission, pid, uid);
+    }
+
+    boolean reduced, prepared, playing, foreground;
+    int generation;
+    /** mkoai: set when a poster card is tapped — the detail page auto-plays once
+     * (single-episode title or resume bookmark), then consumes this flag so going
+     * back from the player never re-triggers playback. */
+    boolean autoPlayOnDetail;
+    static final int MAX_HOME_SNAPSHOTS = 8;
+    final Map<String, SourceEngine> engines = new HashMap<>();
+    final SingleFlight<SourceEngine> engineInitializations = new SingleFlight<>();
+    final Map<String, HomeScreen.Snapshot> homeData =
+            Collections.synchronizedMap(
+                    new LinkedHashMap<String, HomeScreen.Snapshot>(16, 0.75f, true) {
+                        @Override
+                        protected boolean removeEldestEntry(
+                                Map.Entry<String, HomeScreen.Snapshot> eldest) {
+                            return size() > MAX_HOME_SNAPSHOTS;
+                        }
+                    });
+    AppDialog appDialog;
+    FrameLayout playbackLayer;
+    MiniDetails miniDetails;
+    boolean miniMode;
+    boolean changingMiniEpisode;
+    FrameLayout playerOverlay;
+    boolean controlsVisible = true;
+    Runnable hideControls;
+    PlayerChrome playerChrome;
+    MoviePlayer player;
+    com.pilipala.emby.EmbyLibrary.Reporter embyReporter;
+    String configOrigin = "";
+    TextView playStatus, playClock;
+    final SeekGesture seekGesture = new SeekGesture();
+    String seekStatus = "";
+    final Runnable seekPulse =
+            new Runnable() {
+                public void run() {
+                    if (!seekGesture.active) return;
+                    if (player == null
+                            || !prepared
+                            || current == null
+                            || !current.player
+                            || miniMode
+                            || !foreground) {
+                        finishSeek(false);
+                        return;
+                    }
+                    seekGesture.advance(SystemClock.uptimeMillis());
+                    previewSeek();
+                    scheduleHide();
+                    ui.postDelayed(this, 100);
+                }
+            };
+
+    static final class Screen {
+        MobileShell mobileHome;
+        Runnable render;
+        String focus, homeReturnFocus;
+        int scroll;
+        int episodeFocus = -1;
+        String episodeFocusLine = "";
+        final EpisodeSelection selection = new EpisodeSelection();
+        boolean player, home;
+        HomeScreen.State homeState;
+        HomeScreen retainedHome;
+
+        /** True while a listing redirect (folder / action / cross-search) has not drawn a page. */
+        boolean redirect;
+
+        Screen(Runnable r) {
+            render = r;
+        }
+    }
+
+    /** Foreground activity that source extensions may need for dialogs; cleared on destroy. */
+    static volatile MainActivity activeActivity;
+
+    /**
+     * Extension background threads must never take the whole app down. Main-thread errors and
+     * crashes without extension frames still reach the system handler unchanged.
+     */
+    static boolean isPluginBackgroundCrash(Thread thread, Throwable error, Thread mainThread) {
+        return ListingRoute.isPluginBackgroundCrash(thread, error, mainThread);
+    }
+
+    private static volatile boolean crashGuardInstalled;
+
+    static void installPluginCrashGuard() {
+        if (crashGuardInstalled) return;
+        crashGuardInstalled = true;
+        final Thread.UncaughtExceptionHandler previous =
+                Thread.getDefaultUncaughtExceptionHandler();
+        final Thread main = android.os.Looper.getMainLooper().getThread();
+        Thread.setDefaultUncaughtExceptionHandler(
+                (thread, error) -> {
+                    boolean pluginTrace =
+                            ListingRoute.hasPluginFrame(error) || hasDexClassLoaderFrame(error);
+                    boolean bgPlugin =
+                            isPluginBackgroundCrash(thread, error, main)
+                                    || (thread != null
+                                            && thread != main
+                                            && (pluginTrace
+                                                    || thread.getContextClassLoader()
+                                                            instanceof
+                                                            dalvik.system.DexClassLoader));
+                    if (bgPlugin) {
+                        AppLog.w(
+                                "PluginGuard",
+                                "extension thread failed: " + thread.getName(),
+                                error);
+                        MainActivity activity = activeActivity;
+                        if (activity != null)
+                            activity.ui.post(
+                                    () -> {
+                                        if (!activity.isFinishing())
+                                            activity.toast("來源擴充套件出錯，已攔截，應用繼續執行");
+                                    });
+                        return;
+                    }
+                    if (thread == main && pluginTrace) {
+                        AppLog.w("PluginGuard", "extension main-thread callback failed", error);
+                        MainActivity activity = activeActivity;
+                        if (activity != null && activity.prefs != null) {
+                            activity.prefs.edit().putString(Prefs.LOADING_SITE, "").commit();
+                            activity.ui.post(
+                                    () -> {
+                                        if (!activity.isFinishing()) activity.toast("擴充套件操作未能完成，請重試");
+                                    });
+                        }
+                        while (true) {
+                            try {
+                                android.os.Looper.loop();
+                                return;
+                            } catch (Throwable nextError) {
+                                if (!ListingRoute.hasPluginFrame(nextError)
+                                        && !hasDexClassLoaderFrame(nextError)) {
+                                    if (previous != null)
+                                        previous.uncaughtException(thread, nextError);
+                                    return;
+                                }
+                                AppLog.w(
+                                        "PluginGuard",
+                                        "extension main-thread follow-up error",
+                                        nextError);
+                            }
+                        }
+                    }
+                    MainActivity activity = activeActivity;
+                    if (activity != null && activity.prefs != null) {
+                        String currentSite = activity.prefs.getString(Prefs.SELECTED_SITE, "");
+                        if (currentSite != null && !currentSite.isEmpty()) {
+                            activity.prefs
+                                    .edit()
+                                    .putString(Prefs.LOADING_SITE, currentSite)
+                                    .commit();
+                        }
+                    }
+                    if (previous != null) previous.uncaughtException(thread, error);
+                });
+    }
+
+    static boolean hasDexClassLoaderFrame(Throwable error) {
+        if (error == null) return false;
+        LinkedHashSet<ClassLoader> loaders = new LinkedHashSet<>(CspEngine.LOADERS.values());
+        synchronized (CspEngine.ALL_PLUGIN_LOADERS) {
+            loaders.addAll(CspEngine.ALL_PLUGIN_LOADERS);
+        }
+        if (loaders.isEmpty()) return false;
+        int depth = 0;
+        for (Throwable t = error; t != null && depth < 12; t = t.getCause(), depth++) {
+            for (StackTraceElement e : t.getStackTrace()) {
+                String cls = e.getClassName();
+                if (cls == null
+                        || cls.startsWith("android.")
+                        || cls.startsWith("java.")
+                        || cls.startsWith("javax.")
+                        || cls.startsWith("dalvik.")
+                        || cls.startsWith("com.android.")
+                        || cls.startsWith("com.pilipala.")) continue;
+                for (ClassLoader loader : loaders) {
+                    try {
+                        Class<?> loaded = Class.forName(cls, false, loader);
+                        ClassLoader loadedCl = loaded.getClassLoader();
+                        if (loadedCl == loader
+                                || (loadedCl instanceof dalvik.system.BaseDexClassLoader
+                                        && loadedCl != MainActivity.class.getClassLoader())) {
+                            return true;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            if (t.getCause() == t) break;
+        }
+        return false;
+    }
+
+    /** Opens a list card without leaving an invisible redirect page in the back stack. */
+    /**
+     * mkoai 2.0.36: home-card tap. A home (awwrated) card has no real
+     * source id yet (its id is {@code msearch:…}) — open the detail
+     * page immediately and let it start the source search AT the tap,
+     * instead of diverting to the search page. Every other card behaves
+     * exactly like openListing.
+     *
+     * <p>mkoai 2.0.39: a TMDB-row card carries {@code sourceApi} — the
+     * source that confirmed the title (the cross-source availability
+     * check may have found it in a different source than the current
+     * one). Open the detail page on THAT source, because the card's id
+     * only exists there; catalog ids are not shared across sources.
+     * Falls back to the given site when the confirming source is gone.
+     */
+    void openHomeCard(Cms.Site s, Cms.Video v) {
+        if (v == null) return;
+        Cms.Site target = s;
+        if (v.sourceApi != null && !v.sourceApi.isEmpty()
+                && (target == null || !v.sourceApi.equals(target.api))
+                && config != null && config.sites != null) {
+            for (Cms.Site cand : config.sites) {
+                if (cand != null && v.sourceApi.equals(cand.api)) {
+                    target = cand;
+                    break;
+                }
+            }
+        }
+        final Cms.Site site = target;
+        if (v.id != null && v.id.startsWith("msearch:")) {
+            open(new Screen(() -> detail(site, v)), true);
+            return;
+        }
+        openListing(site, v);
+    }
+
+    void openListing(Cms.Site s, Cms.Video v) {
+        if (v == null) return;
+        if (v.action != null && !v.action.isEmpty()) {
+            sourceAction(s, v.action);
+            return;
+        }
+        if ("action".equalsIgnoreCase(v.tag) && v.id != null && !v.id.isEmpty()) {
+            sourceAction(s, v.id);
+            return;
+        }
+        if ("folder".equalsIgnoreCase(v.tag)) {
+            open(new Screen(() -> videos(s, v.id, v.title, 1, null)), true);
+            return;
+        }
+        if (v.id != null && v.id.startsWith("msearch:")) {
+            crossSearch(Cms.searchTitle(v));
+            return;
+        }
+        if (SourceController.isConfigOrNetdiskActionCard(s, v)) {
+            SourceController.sourceAction(this, s, v.id, true);
+            return;
+        }
+        // mkoai 2.0.33: tapping a card opens the detail page only — never
+        // auto-play. The detail page pre-selects the best line; the user
+        // presses play themselves. (autoPlayOnDetail is still set by the
+        // detail page's own play button / episode taps / next-episode
+        // card — those are user-initiated play actions and keep working.)
+        open(new Screen(() -> detail(s, v)), true);
+    }
+
+    /**
+     * Called by a detail redirect that will not draw its own page. Restores the page underneath
+     * so Back never re-runs the redirect forever.
+     */
+    void dropRedirect() {
+        if (current != null && current.redirect && !back.isEmpty()) current = back.pop();
+    }
+
+    static boolean isRedirectListing(Cms.Video v) {
+        return v != null && ListingRoute.isRedirect(v.tag, v.action, v.id);
+    }
+
+    /**
+     * Detail pages reached for a folder, action or cross-search card hand over to the real page.
+     * The invisible detail screen is removed first, so Back returns to the list instead of
+     * re-opening the folder in a loop.
+     */
+    boolean redirectListing(Cms.Site s, Cms.Video v) {
+        if (!isRedirectListing(v) && !SourceController.isConfigOrNetdiskActionCard(s, v)) {
+            return false;
+        }
+        if (current != null) current.redirect = true;
+        if (back.isEmpty() && "folder".equalsIgnoreCase(v.tag)) {
+            open(new Screen(() -> videos(s, v.id, v.title, 1, null)), false);
+            return true;
+        }
+        dropRedirect();
+        openListing(s, v);
+        return true;
+    }
+
+    interface Work<T> {
+        T run() throws Exception;
+    }
+
+    interface Done<T> {
+        void accept(T value) throws Exception;
+    }
+
+    static int[] viewportHint;
+    boolean layoutReady, layoutIntro;
+    int usableWidth, usableHeight;
+    int formFactor = TvLayoutPolicy.FORM_TV;
+
+    static int detectFormFactor(Context base, int widthPixels, int heightPixels, int densityDpi) {
+        int smallestDp =
+                densityDpi > 0
+                        ? Math.round(Math.min(widthPixels, heightPixels) * 160f / densityDpi)
+                        : 360;
+        if (viewportHint == null) {
+            try {
+                android.content.pm.ApplicationInfo appInfo =
+                        base.getPackageManager()
+                                .getApplicationInfo(
+                                        base.getPackageName(),
+                                        android.content.pm.PackageManager.GET_META_DATA);
+                if (appInfo != null && appInfo.metaData != null) {
+                    String edition = appInfo.metaData.getString("app.mkoai.player.EDITION");
+                    if ("mobile".equals(edition)) {
+                        return smallestDp >= 600
+                                ? TvLayoutPolicy.FORM_TABLET
+                                : TvLayoutPolicy.FORM_PHONE;
+                    }
+                    if ("tv".equals(edition)) {
+                        return TvLayoutPolicy.FORM_TV;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        boolean tvMode = false;
+        try {
+            UiModeManager uiMode = (UiModeManager) base.getSystemService(Context.UI_MODE_SERVICE);
+            tvMode =
+                    uiMode != null
+                            && uiMode.getCurrentModeType()
+                                    == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION;
+        } catch (Exception ignored) {
+        }
+        boolean hasTouch = false;
+        try {
+            hasTouch =
+                    base.getPackageManager()
+                            .hasSystemFeature(
+                                    android.content.pm.PackageManager.FEATURE_TOUCHSCREEN);
+        } catch (Exception ignored) {
+        }
+        return TvLayoutPolicy.formFactor(tvMode, hasTouch, smallestDp);
+    }
+
+    boolean isTvDevice() {
+        return formFactor == TvLayoutPolicy.FORM_TV;
+    }
+
+    boolean isPortrait() {
+        return TvLayoutPolicy.isPortrait(windowWidth(), windowHeight());
+    }
+
+    boolean useBottomDock() {
+        return TvLayoutPolicy.useBottomDock(windowWidth(), windowHeight(), formFactor);
+    }
+
+    boolean useTopDock() {
+        return isTvDevice() && prefs.getInt(Prefs.TV_DOCK_POSITION, 0) == 1;
+    }
+
+    void applyMobileSystemBars(boolean fullscreenPlayer) {
+        if (isTvDevice()) return;
+        try {
+            Window w = getWindow();
+            if (w == null) return;
+            WindowManager.LayoutParams lp = w.getAttributes();
+            try {
+                java.lang.reflect.Field f = lp.getClass().getField("layoutInDisplayCutoutMode");
+                // 1 == WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                if (f.getInt(lp) != 1) {
+                    f.setInt(lp, 1);
+                    w.setAttributes(lp);
+                }
+            } catch (Throwable ignored) {
+            }
+            if (fullscreenPlayer) {
+                w.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                w.getDecorView().setSystemUiVisibility(5894);
+            } else {
+                w.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                w.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
+                w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+                w.getDecorView()
+                        .setSystemUiVisibility(
+                                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+                w.setStatusBarColor(Color.TRANSPARENT);
+                w.setNavigationBarColor(0xff141414);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    int navigationBarHeight() {
+        if (isTvDevice()) return 0;
+        try {
+            Window w = getWindow();
+            if (w == null || root == null) return 0;
+            android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+            if (android.os.Build.VERSION.SDK_INT >= 17) {
+                getWindowManager().getDefaultDisplay().getRealMetrics(dm);
+            } else {
+                getWindowManager().getDefaultDisplay().getMetrics(dm);
+            }
+            int[] loc = new int[2];
+            root.getLocationOnScreen(loc);
+            int rootBottom = loc[1] + root.getHeight();
+            // Only return bottom inset when the view actually extends into the system bar zone
+            if (root.getHeight() > 0 && dm.heightPixels - rootBottom >= dp(24)) {
+                return 0;
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                android.view.WindowInsets insets = w.getDecorView().getRootWindowInsets();
+                if (insets != null) {
+                    return Math.max(0, Math.min(dp(48), insets.getSystemWindowInsetBottom()));
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0;
+    }
+
+    void togglePlayerOrientation() {
+        if (isTvDevice()) return;
+        if (isPortrait()) {
+            setRequestedOrientation(
+                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+            if (playerChrome != null) playerChrome.relayout();
+            return;
+        }
+        // mkoai 2.0.36: exiting fullscreen returns to the detail page
+        // (Netflix-style: portrait detail page with the title, lines and
+        // sources below) instead of leaving a portrait player page.
+        // leavePlayback saves the position, so the detail page's play
+        // button resumes where the user left off.
+        if (!back.isEmpty()) {
+            leavePlayback();
+            return;
+        }
+        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        if (playerChrome != null) playerChrome.relayout();
+    }
+
+    int windowWidth() {
+        return usableWidth > 0 ? usableWidth : getResources().getDisplayMetrics().widthPixels;
+    }
+
+    int windowHeight() {
+        return usableHeight > 0 ? usableHeight : getResources().getDisplayMetrics().heightPixels;
+    }
+
+    @Override
+    protected void attachBaseContext(Context base) {
+        android.util.DisplayMetrics screen = new android.util.DisplayMetrics();
+        ((WindowManager) base.getSystemService(Context.WINDOW_SERVICE))
+                .getDefaultDisplay()
+                .getMetrics(screen);
+        int detectedForm =
+                detectFormFactor(base, screen.widthPixels, screen.heightPixels, screen.densityDpi);
+        int percent = base.getSharedPreferences(Prefs.FILE, 0).getInt(Prefs.UI_SCALE_PERCENT, 100);
+        int[] hint = viewportHint;
+        if (hint != null && hint[0] == screen.widthPixels && hint[1] == screen.heightPixels) {
+            screen.widthPixels = hint[2];
+            screen.heightPixels = hint[3];
+        }
+        android.content.res.Configuration layout =
+                new android.content.res.Configuration(base.getResources().getConfiguration());
+        layout.densityDpi =
+                TvLayoutPolicy.deviceDensityDpi(
+                        screen.widthPixels, screen.heightPixels, percent, detectedForm);
+        float density = layout.densityDpi / 160f;
+        if (detectedForm == TvLayoutPolicy.FORM_TV) {
+            layout.screenWidthDp =
+                    Math.round(Math.max(screen.widthPixels, screen.heightPixels) / density);
+            layout.screenHeightDp =
+                    Math.round(Math.min(screen.widthPixels, screen.heightPixels) / density);
+        } else {
+            layout.screenWidthDp = Math.round(screen.widthPixels / density);
+            layout.screenHeightDp = Math.round(screen.heightPixels / density);
+        }
+        layout.smallestScreenWidthDp = Math.min(layout.screenWidthDp, layout.screenHeightDp);
+        super.attachBaseContext(base.createConfigurationContext(layout));
+    }
+
+    @Override
+    public void onCreate(Bundle b) {
+        super.onCreate(b);
+        privateMode = PrivacySpace.active;
+        if (privateMode) getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        activeActivity = this;
+        installPluginCrashGuard();
+        android.util.DisplayMetrics rawScreen = new android.util.DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getMetrics(rawScreen);
+        formFactor =
+                detectFormFactor(
+                        this, rawScreen.widthPixels, rawScreen.heightPixels, rawScreen.densityDpi);
+        setRequestedOrientation(
+                isTvDevice()
+                        ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                        : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER);
+        // 2.0.53: TV card posters load at w500 (smaller decode on the weak TV SoC).
+        ImageLoader.tvCardsSmall = isTvDevice();
+        configStore = new ConfigStore(getFilesDir());
+        if (isTvDevice()) {
+            getWindow().getDecorView().setSystemUiVisibility(5894);
+        } else {
+            applyMobileSystemBars(false);
+        }
+        prefs = getSharedPreferences(privateMode ? "movie-private" : Prefs.FILE, MODE_PRIVATE);
+        // mkoai account sync: auto-upload when local history/favorites change (main prefs only).
+        if (!privateMode) {
+            prefs.registerOnSharedPreferenceChangeListener(
+                    (shared, key) -> {
+                        if (Prefs.WATCH_HISTORY.equals(key) || Prefs.FAVORITES.equals(key)) {
+                            SupabaseSync.scheduleUpload(MainActivity.this);
+                        }
+                    });
+            handleSupabaseCallback(getIntent());
+            SupabaseSync.downloadOnStart(this);
+        }
+        reduced = prefs.getBoolean(Prefs.REDUCED, false);
+        // 2.0.54 TV lite: the old TV never animates (focus/press springs,
+        // startup intro, page slide-in, tab smooth scroll all read this flag).
+        if (isTvDevice()) reduced = true;
+        configOrigin = prefs.getString("origin", "");
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) images.resize(ImageDecodePolicy.cacheBytes(am.getMemoryClass()));
+        } catch (Exception ignored) {
+        }
+        try {
+            File f = new File(getFilesDir(), "config.json");
+            if (f.exists())
+                try (InputStream i = new FileInputStream(f)) {
+                    config = Cms.parseConfig(Cms.read(i, Cms.MAX_JSON), configOrigin);
+                    SourcePicker.applyEdits(this, config, configOrigin);
+                    SourcePreferences.restoreDefault(this);
+                }
+        } catch (Exception e) {
+            AppLog.w("MainActivity", "load saved config failed", e);
+            config = null;
+        }
+        // Phone / tablet only: restore the offline download queue (never started on TV).
+        if (!isTvDevice()) DownloadManager.get(this);
+        // mkoai: preload the awwrated en -> Traditional-Chinese title map in
+        // the background, so foreign titles (Simkl) translate instantly when
+        // the home loads. Disk cache first, live refresh behind it.
+        AwwratedTitles.preload(getFilesDir());
+        if (sharedPhonetic != null) {
+            phonetic = sharedPhonetic;
+            phoneticReady.countDown();
+        } else {
+            worker.execute(
+                    () -> {
+                        try {
+                            PhoneticSearchIndex index =
+                                    new PhoneticSearchIndex(
+                                            getAssets().open("search/pinyin-characters.tsv"),
+                                            getAssets().open("search/pinyin-phrases.dict.yaml"),
+                                            getAssets().open("search/title-phrases.txt"));
+                            try {
+                                org.json.JSONArray old =
+                                        new org.json.JSONArray(
+                                                prefs.getString(Prefs.PHONETIC_TITLES, "[]"));
+                                for (int i = 0; i < old.length(); i++)
+                                    index.learn(old.optString(i));
+                                org.json.JSONArray history =
+                                        new org.json.JSONArray(
+                                                prefs.getString(Prefs.GLOBAL_SEARCH_HISTORY, "[]"));
+                                for (int i = history.length() - 1; i >= 0; i--)
+                                    index.prefer(history.optString(i));
+                            } catch (Throwable ignored) {
+                            }
+                            sharedPhonetic = index;
+                            phonetic = index;
+                        } catch (Throwable ignored) {
+                        } finally {
+                            phoneticReady.countDown();
+                        }
+                    });
+        }
+        layoutIntro = b == null || b.getBoolean("layout_initial_launch", false);
+        root = new FrameLayout(this);
+        root.setBackgroundColor(DARK);
+        setContentView(root);
+        // mkoai launch splash (phone/tablet, fresh launch only).
+        SplashScreen.show(this, b == null);
+        // mkoai 2.0.33: home preload — fetch the awwrated home and
+        // prefilter it on a background thread, in parallel with the
+        // splash, so the home is already rendered when the splash lifts
+        // (no loading spinner after the splash). Never blocks onCreate
+        // and never throws; the splash fade waits for it (capped) via
+        // AwwratedHome.homePreloadDone. No site selected yet (first run,
+        // no config): fetchHome only, the splash still ends at its
+        // normal time.
+        // 2.0.40 (2b): the prefilter is disk-only across all sources —
+        // no live network and no engine creation during the splash, so
+        // the preload finishes fast. Live verification happens in the
+        // home load's phase 2 instead.
+        if (b == null && !isTvDevice()) {
+            worker.execute(
+                    () -> {
+                        try {
+                            List<Cms.Video> home =
+                                    AwwratedHome.fetchHome(getFilesDir());
+                            Cms.Site selected = null;
+                            if (config != null) {
+                                String wanted =
+                                        prefs.getString(Prefs.SELECTED_SITE, "");
+                                for (Cms.Site s : config.sites) {
+                                    if (s.key.equals(wanted) && available(s)) {
+                                        selected = s;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (selected != null && !home.isEmpty()) {
+                                try {
+                                    // 2.0.40 (2b): disk-only cross-source
+                                    // prefilter — no network, no engine
+                                    // creation, so the preload finishes
+                                    // fast and the splash never waits on
+                                    // live source checks. Titles with a
+                                    // fresh disk hit keep their confirming
+                                    // source; the rest are verified live
+                                    // by the home load's phase 2.
+                                    List<String> keys = new ArrayList<>();
+                                    keys.add(selected.api);
+                                    boolean youthOn =
+                                            prefs.getBoolean(Prefs.YOUTH_MODE, false);
+                                    Set<String> seen = new HashSet<>();
+                                    seen.add(selected.api);
+                                    if (config != null && config.sites != null) {
+                                        for (Cms.Site s : config.sites) {
+                                            if (s == null
+                                                    || s.api == null
+                                                    || s.api.isEmpty()
+                                                    || seen.contains(s.api)) {
+                                                continue;
+                                            }
+                                            if (youthOn
+                                                    && SearchVariants.isAdultSource(s)) {
+                                                continue;
+                                            }
+                                            seen.add(s.api);
+                                            keys.add(s.api);
+                                        }
+                                    }
+                                    List<Cms.Video> visible =
+                                            AwwratedHome.prefilterVisibleDiskCross(
+                                                    home, keys, getFilesDir());
+                                    if (visible != null && !visible.isEmpty()) {
+                                        home = visible;
+                                    }
+                                } catch (Throwable ignored) {
+                                    // Prefilter failed: keep the unfiltered
+                                    // home list; the home load re-checks.
+                                }
+                            }
+                            AwwratedHome.preloadedHome = home;
+                        } catch (Throwable ignored) {
+                            // Preload failed entirely: the home loads
+                            // normally and the splash ends on its cap.
+                        } finally {
+                            AwwratedHome.homePreloadDone = true;
+                        }
+                    });
+        }
+        root.addOnLayoutChangeListener(
+                new View.OnLayoutChangeListener() {
+                    public void onLayoutChange(
+                            View view,
+                            int l,
+                            int t,
+                            int r,
+                            int bottom,
+                            int ol,
+                            int ot,
+                            int or,
+                            int ob) {
+                        int width = r - l, height = bottom - t;
+                        if (width <= 0 || height <= 0) return;
+                        view.removeOnLayoutChangeListener(this);
+                        usableWidth = width;
+                        usableHeight = height;
+                        int expected =
+                                TvLayoutPolicy.deviceDensityDpi(
+                                        width,
+                                        height,
+                                        prefs.getInt(Prefs.UI_SCALE_PERCENT, 100),
+                                        formFactor);
+                        if (viewportHint == null
+                                && expected != getResources().getDisplayMetrics().densityDpi) {
+                            android.util.DisplayMetrics display = new android.util.DisplayMetrics();
+                            getWindowManager().getDefaultDisplay().getMetrics(display);
+                            viewportHint =
+                                    new int[] {
+                                        display.widthPixels, display.heightPixels, width, height
+                                    };
+                            recreate();
+                            return;
+                        }
+                        ui.post(
+                                () -> {
+                                    if (isFinishing() || isDestroyed()) return;
+                                    String crashedSite = prefs.getString(Prefs.LOADING_SITE, "");
+                                    boolean recoveredFromCrash =
+                                            crashedSite != null && !crashedSite.isEmpty();
+                                    if (recoveredFromCrash) {
+                                        prefs.edit()
+                                                .putString(Prefs.LOADING_SITE, "")
+                                                .putString(Prefs.SELECTED_SITE, "")
+                                                .commit();
+                                    }
+                                    worker.execute(
+                                            () ->
+                                                    MagnetStream.cleanStaleSessions(
+                                                            MainActivity.this));
+                                    if (!reduced && config != null) {
+                                        final String savedKey =
+                                                prefs.getString(Prefs.SELECTED_SITE, "");
+                                        if (savedKey != null && !savedKey.isEmpty()) {
+                                            for (final Cms.Site s : config.sites) {
+                                                if (s.key.equals(savedKey) && available(s)) {
+                                                    worker.execute(
+                                                            () -> {
+                                                                try {
+                                                                    engine(s);
+                                                                } catch (Throwable ignored) {
+                                                                }
+                                                            });
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    open(new Screen(() -> home()), false);
+                                    layoutReady = true;
+                                    if (recoveredFromCrash) {
+                                        toast("上次載入該片源時異常退出，已自動重置片源選擇");
+                                    } else if (layoutIntro && isTvDevice()) {
+                                        StartupIntro.show(MainActivity.this);
+                                    }
+                                });
+                    }
+                });
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (!layoutReady || root == null) return;
+        if (!isTvDevice() && usableWidth > 0 && usableHeight > 0 && newConfig != null) {
+            boolean configPortrait =
+                    newConfig.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT;
+            boolean configLandscape =
+                    newConfig.orientation
+                            == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+            if ((configPortrait && usableWidth > usableHeight)
+                    || (configLandscape && usableWidth < usableHeight)) {
+                int tmp = usableWidth;
+                usableWidth = usableHeight;
+                usableHeight = tmp;
+                if (current != null && current.player) {
+                    if (playerChrome != null) playerChrome.scheduleLayout();
+                } else if (current != null) {
+                    refresh();
+                }
+            }
+        }
+        root.post(this::syncRootDimensions);
+        ui.postDelayed(this::syncRootDimensions, 140);
+    }
+
+    void syncRootDimensions() {
+        if (isFinishing() || isDestroyed() || root == null || !layoutReady) return;
+        int w = root.getWidth(), h = root.getHeight();
+        if (w <= 0 || h <= 0) return;
+        boolean orientationFlipped = (w < h) != (usableWidth < usableHeight);
+        if (w != usableWidth || h != usableHeight) {
+            usableWidth = w;
+            usableHeight = h;
+            if (current != null && current.player) {
+                // mkoai: never keep playing video in portrait — rotating to
+                // portrait jumps back to the info/detail page.
+                if (orientationFlipped && w < h) {
+                    leavePlayback();
+                    return;
+                }
+                if (playerChrome != null) playerChrome.relayout();
+                if (playbackControls != null)
+                    playbackControls.resize(
+                            playbackControls.videoWidth, playbackControls.videoHeight);
+            } else if (current != null && orientationFlipped) {
+                refresh();
+            }
+        }
+    }
+
+    void watchRootLayout(FrameLayout targetRoot) {
+        if (targetRoot == null) return;
+        targetRoot.addOnLayoutChangeListener(
+                (view, l, t, r, b, ol, ot, or, ob) -> {
+                    int w = r - l, h = b - t;
+                    if (w <= 0 || h <= 0 || !layoutReady || view != root) return;
+                    if (w != usableWidth || h != usableHeight) {
+                        ui.post(this::syncRootDimensions);
+                    }
+                });
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle out) {
+        out.putBoolean("layout_initial_launch", !layoutReady && layoutIntro);
+        super.onSaveInstanceState(out);
+    }
+
+    int dp(float x) {
+        return Math.round(x * getResources().getDisplayMetrics().density);
+    }
+
+    void glass(View view, float radius) {
+        com.pilipala.glass.GlassworkSurface.attach(
+                view, root, dp(radius), () -> prefs.getBoolean(Prefs.REDUCED_TRANSPARENCY, false));
+    }
+
+    GradientDrawable bg(int color, float radius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(dp(radius));
+        return d;
+    }
+
+    TextView text(String s, float size, int color) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextColor(color);
+        t.setTextSize(size);
+        t.setFontFeatureSettings("kern");
+        return t;
+    }
+
+    LinearLayout vertical() {
+        LinearLayout v = new LinearLayout(this);
+        v.setOrientation(LinearLayout.VERTICAL);
+        return v;
+    }
+
+    LinearLayout row() {
+        LinearLayout v = new LinearLayout(this);
+        v.setOrientation(LinearLayout.HORIZONTAL);
+        v.setGravity(Gravity.CENTER_VERTICAL);
+        return v;
+    }
+
+    void gap(LinearLayout p, int n) {
+        View v = new View(this);
+        p.addView(v, new LinearLayout.LayoutParams(1, dp(n)));
+    }
+
+    void paragraph(String s) {
+        TextView t = text(s, 16, MUTED);
+        t.setLineSpacing(dp(5), 1);
+        body.addView(t);
+        gap(body, 14);
+    }
+
+    Button button(String label, String key, Runnable action) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(15);
+        b.setTextColor(WHITE);
+        b.setAllCaps(false);
+        b.setGravity(Gravity.CENTER);
+        b.setIncludeFontPadding(false);
+        b.setStateListAnimator(null);
+        b.setOutlineProvider(null);
+        b.setMinHeight(dp(48));
+        b.setMinimumHeight(dp(48));
+        b.setPadding(dp(20), dp(9), dp(20), dp(9));
+        b.setBackground(bg(0xff242429, 12));
+        b.setTag(key);
+        b.setFocusable(true);
+        b.setFocusableInTouchMode(isTvDevice());
+        b.setOnClickListener(v -> action.run());
+        pressFeedback(b);
+        b.setOnFocusChangeListener(
+                (v, f) ->
+                        FocusMotion.style(
+                                this, b, f, 0xff242429, WHITE, 12, WHITE, DARK, false, 1.025f));
+        return b;
+    }
+
+    void pressFeedback(View view) {
+        view.setOnTouchListener(
+                (v, event) -> {
+                    if (!isTvDevice()) {
+                        if (event.getAction() == android.view.MotionEvent.ACTION_DOWN) {
+                            v.setAlpha(0.75f);
+                        } else if (event.getAction() == android.view.MotionEvent.ACTION_UP
+                                || event.getAction() == android.view.MotionEvent.ACTION_CANCEL) {
+                            v.setAlpha(1.0f);
+                        }
+                        return false;
+                    }
+                    if (event.getAction() == android.view.MotionEvent.ACTION_DOWN) {
+                        v.requestFocus();
+                        FocusMotion.press(this, v, true);
+                    } else if (event.getAction() == android.view.MotionEvent.ACTION_UP
+                            || event.getAction() == android.view.MotionEvent.ACTION_CANCEL)
+                        FocusMotion.press(this, v, false);
+                    return false;
+                });
+        view.setOnKeyListener(
+                (v, key, event) -> {
+                    FocusMotion.key(this, v, key, event);
+                    return false;
+                });
+    }
+
+    Button navButton(String label, String key, Runnable action) {
+        Button b = button(label, key, action);
+        b.setTextSize(13.5f);
+        b.setSingleLine(true);
+        b.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setPadding(dp(14), dp(6), dp(14), dp(6));
+        b.setMinHeight(dp(38));
+        b.setMinimumHeight(dp(38));
+        GradientDrawable pill = bg(0xff282832, 19);
+        pill.setStroke(Math.max(1, dp(1)), 0x26ffffff);
+        b.setBackground(pill);
+        b.setTextColor(0xffe6e6ee);
+        b.setOnFocusChangeListener(
+                (v, f) ->
+                        FocusMotion.style(
+                                this, b, f, 0xff282832, WHITE, 19, 0xffe6e6ee, DARK, false, 1.02f));
+        return b;
+    }
+
+    void chooseOrImport() {
+        if (config == null) importDialog();
+        else chooseSources();
+    }
+
+    void addButton(LinearLayout p, Button b) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.setMargins(dp(4), dp(5), dp(10), dp(8));
+        p.addView(b, lp);
+    }
+
+    int statusBarHeight() {
+        int best = isTvDevice() ? 0 : dp(38);
+        try {
+            if (getWindow() != null && getWindow().getDecorView() != null) {
+                WindowInsets insets = getWindow().getDecorView().getRootWindowInsets();
+                if (insets != null) {
+                    best = Math.max(best, insets.getSystemWindowInsetTop());
+                    if (Build.VERSION.SDK_INT >= 28 && insets.getDisplayCutout() != null) {
+                        best = Math.max(best, insets.getDisplayCutout().getSafeInsetTop());
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            int resId =
+                    android.content.res.Resources.getSystem()
+                            .getIdentifier("status_bar_height", "dimen", "android");
+            if (resId > 0) {
+                best =
+                        Math.max(
+                                best,
+                                android.content.res.Resources.getSystem()
+                                        .getDimensionPixelSize(resId));
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            int resId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+            if (resId > 0) {
+                best = Math.max(best, getResources().getDimensionPixelSize(resId));
+            }
+        } catch (Exception ignored) {
+        }
+        return best;
+    }
+
+    void renderPage(String title, String eyebrow) {
+        renderPage(title, eyebrow, false);
+    }
+
+    void preparePage(boolean navigation) {
+        clearPlaybackLoading();
+        cancelArtwork();
+        cancelPageRequests();
+        if (current != null) current.home = navigation;
+        if (searchScreen != null) {
+            searchScreen.close();
+            searchScreen = null;
+        }
+        stopWeb();
+        stopMagnet();
+        releasePlayer();
+        if (!isTvDevice()) {
+            applyMobileSystemBars(false);
+        }
+        generation++;
+    }
+
+    void renderPage(String title, String eyebrow, boolean navigation) {
+        preparePage(navigation);
+        root = new FrameLayout(this);
+        root.setClipChildren(false);
+        root.setClipToPadding(false);
+        root.setBackgroundColor(DARK);
+        root.addView(ImageLoader.createAtmosphere(this), new FrameLayout.LayoutParams(-1, -1));
+        homeAmbient = null;
+        if (navigation
+                && prefs.getBoolean(Prefs.HOME_AMBIENT, true)
+                && !prefs.getBoolean(Prefs.WALLPAPER_ENABLED, false)
+                // 2.0.53: TV — skip the second full-screen frost view (the
+                // Atmosphere behind it is already a solid colour on TV).
+                && !isTvDevice()) {
+            homeAmbient = new HomeAmbient(this);
+            root.addView(homeAmbient, new FrameLayout.LayoutParams(-1, -1));
+        }
+        if (navigation) root.addView(homeGradient(), new FrameLayout.LayoutParams(-1, -1));
+        scroll = new TvScrollView(this);
+        scroll.setClipChildren(false);
+        scroll.setClipToPadding(false);
+        scroll.setFillViewport(true);
+        body = vertical();
+        body.setClipChildren(false);
+        body.setClipToPadding(false);
+        if (!isTvDevice()) {
+            int sidePad = isPortrait() ? dp(18) : dp(28);
+            body.setPadding(sidePad, statusBarHeight() + dp(16), sidePad, dp(48));
+        } else {
+            body.setPadding(dp(46), dp(26), dp(46), dp(44));
+        }
+        scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
+        root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(root);
+        watchRootLayout(root);
+        homeDock = null;
+        if (navigation) {
+            if (useBottomDock()) {
+                body.setPadding(dp(18), statusBarHeight() + dp(14), dp(18), dp(86));
+            } else if (useTopDock()) {
+                body.setPadding(dp(34), dp(18), dp(34), dp(36));
+            } else {
+                body.setPadding(dp(34), dp(18), dp(100), dp(36));
+            }
+            homeDock = new HomeDock(this);
+            LinearLayout brandRow = row();
+            brandRow.setTag("home-brand");
+            brandRow.setGravity(Gravity.CENTER_VERTICAL);
+            ImageView brandMark = new ImageView(this);
+            brandMark.setImageResource(R.drawable.logo_mark);
+            LinearLayout.LayoutParams brandSize = new LinearLayout.LayoutParams(dp(30), dp(30));
+            brandSize.rightMargin = dp(10);
+            brandRow.addView(brandMark, brandSize);
+            TextView brand = text("MARCO MOVIE", 14, WHITE);
+            brand.setIncludeFontPadding(false);
+            brand.setSingleLine(true);
+            brand.setLetterSpacing(.10f);
+            brand.setTypeface(null, Typeface.BOLD);
+            brandRow.addView(brand);
+            if (homeDock.topMode) {
+                int dockLeftPx = Math.max(0, (windowWidth() - dp(homeDock.mainDp)) / 2);
+                int maxBrandWidth = dockLeftPx - dp(34 + 14);
+                if (maxBrandWidth < dp(90)) {
+                    brand.setVisibility(View.GONE);
+                } else {
+                    brand.setMaxWidth(Math.max(dp(50), maxBrandWidth - dp(40)));
+                    brand.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                }
+                FrameLayout.LayoutParams brandLayout =
+                        new FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                dp(homeDock.crossDp),
+                                Gravity.LEFT | Gravity.TOP);
+                brandLayout.leftMargin = dp(34);
+                brandLayout.topMargin = dp(16);
+                root.addView(brandRow, brandLayout);
+                if (!title.isEmpty()) gap(body, 14);
+            } else {
+                body.addView(brandRow);
+                gap(body, title.isEmpty() ? 14 : 22);
+            }
+        }
+        if (!title.isEmpty()) {
+            TextView eye = text(eyebrow, 12, 0xffa9c9f3);
+            eye.setLetterSpacing(.15f);
+            body.addView(eye);
+            gap(body, 10);
+            TextView heading = text(title, 36, WHITE);
+            heading.setTypeface(null, Typeface.BOLD);
+            body.addView(heading);
+            gap(body, 16);
+        }
+        if (!reduced) {
+            body.setTranslationY(dp(4));
+            body.animate()
+                    .translationY(0)
+                    .setDuration(140)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
+        }
+    }
+
+    /**
+     * Soft home backdrop: a cool light from the top, deepening toward the bottom, with gentle
+     * side shading. Sits above the poster colors or wallpaper and below all content.
+     */
+    View homeGradient() {
+        GradientDrawable vertical =
+                new GradientDrawable(
+                        GradientDrawable.Orientation.TOP_BOTTOM,
+                        new int[] {0x3a3b5a80, 0x0d1a2233, 0x00101013, 0x8c0a0a0d, 0xe60a0a0d});
+        GradientDrawable sides =
+                new GradientDrawable(
+                        GradientDrawable.Orientation.LEFT_RIGHT,
+                        new int[] {0x47000000, 0x00000000, 0x00000000, 0x38000000});
+        View scrim = new View(this);
+        scrim.setTag("home-gradient");
+        scrim.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        scrim.setBackground(
+                new android.graphics.drawable.LayerDrawable(
+                        new android.graphics.drawable.Drawable[] {vertical, sides}));
+        return scrim;
+    }
+
+    boolean available(Cms.Site s) {
+        return SourceController.available(this, s);
+    }
+
+    int engineEpoch;
+
+    SourceEngine engine(Cms.Site s) throws Exception {
+        return SourceController.engine(this, s);
+    }
+
+    synchronized void ensureProxy(Cms.Config snapshot) throws IOException {
+        SourceController.ensureProxy(this, snapshot);
+    }
+
+    void closeEngines() {
+        SourceController.closeEngines(this);
+    }
+
+    void open(Screen s, boolean history) {
+        capture();
+        if (history && current != null) back.push(current);
+        current = s;
+        s.render.run();
+        restore(s);
+    }
+
+    void capture() {
+        if (current != null) {
+            View f = getCurrentFocus();
+            if (f != null && f.getTag() instanceof String) current.focus = (String) f.getTag();
+            if (scroll != null) current.scroll = scroll.getScrollY();
+        }
+    }
+
+    /** Last focus placed by the app rather than the user; late content may replace only this. */
+    View autoFocus;
+
+    void restore(Screen s) {
+        ui.post(
+                () -> {
+                    if (current != s) return;
+                    if (scroll != null) scroll.scrollTo(0, s.scroll);
+                    if (!isTvDevice()) return;
+                    View target = s.focus == null ? null : root.findViewWithTag(s.focus);
+                    if (target != null) {
+                        target.requestFocus();
+                        autoFocus = target;
+                    } else {
+                        View first = root.findViewWithTag("primary");
+                        if (first == null) first = root.findViewWithTag("detail-play");
+                        if (first == null && s.home) {
+                            first = root.findViewWithTag("home-tab:0");
+                            if (first == null) first = root.findViewWithTag("source-switcher");
+                        }
+                        if (first == null) first = root.findViewWithTag("nav-home");
+                        if (first == null) {
+                            ArrayList<View> available = new ArrayList<>();
+                            body.addFocusables(available, View.FOCUS_FORWARD);
+                            if (!available.isEmpty()) first = available.get(0);
+                        }
+                        if (first != null) first.requestFocus();
+                        autoFocus = first;
+                    }
+                });
+    }
+
+    void refresh() {
+        capture();
+        Screen s = current;
+        s.render.run();
+        restore(s);
+    }
+
+    void renderReturn(Screen screen) {
+        if (!isTvDevice() && screen.mobileHome != null && screen.mobileHome.resume()) return;
+        if (isTvDevice() && screen.retainedHome != null && screen.retainedHome.resume()) return;
+        screen.render.run();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (playbackLoading != null) {
+            changingMiniEpisode = false;
+            clearPlaybackLoading();
+            cancelPageRequests();
+            stopWeb();
+            if (current != null && current.player && !prepared) {
+                if (playerChrome != null) playerChrome.setLoading(false);
+                if (playStatus != null) playStatus.setText("已取消載入");
+                showControls(true);
+            }
+            return;
+        }
+        if (current != null && current.player) {
+            if (!miniMode && playbackControls != null) {
+                if (controlsVisible) showControls(false);
+                else if (isLive() || !isTvDevice()) leavePlayback();
+                else minimizePlayback();
+                return;
+            }
+            if (miniMode) {
+                releasePlayer();
+                if (!back.isEmpty()) back.pop();
+                if (!back.isEmpty()) {
+                    current = back.pop();
+                    renderReturn(current);
+                    restore(current);
+                } else {
+                    current = new Screen(this::home);
+                    renderReturn(current);
+                }
+                return;
+            }
+        }
+        if (current != null && current.home) {
+            if (!isTvDevice() && MobileShell.activeTab == 1) {
+                MobileShell.clearSearchSession();
+                MobileShell.activeTab = 0;
+                MobileShell.show(this);
+                return;
+            }
+            if (!isTvDevice() && MobileShell.activeTab == 4) {
+                if (MobileIosSettings.navigateBack(this)) {
+                    return;
+                }
+                if (MobileShell.settingsSubPage != 0) {
+                    MobileShell.settingsSubPage = 0;
+                    MobileShell.show(this);
+                    return;
+                }
+            }
+            if (!isTvDevice() && !back.isEmpty()) {
+                capture();
+                current = back.pop();
+                renderReturn(current);
+                restore(current);
+                return;
+            }
+            if (!isTvDevice() && MobileShell.activeTab != 0) {
+                MobileShell.activeTab = 0;
+                MobileShell.show(this);
+                return;
+            }
+            releasePlayer();
+            exitApp();
+            return;
+        }
+        if (!back.isEmpty()) {
+            capture();
+            current = back.pop();
+            renderReturn(current);
+            restore(current);
+        } else {
+            releasePlayer();
+            exitApp();
+        }
+    }
+
+    volatile boolean allowSystemFinish;
+
+    void exitApp() {
+        allowSystemFinish = true;
+        super.finish();
+    }
+
+    private void interceptPluginFinish() {
+        AppLog.w(
+                "PluginGuard",
+                "intercepted unexpected Activity.finish() from extension",
+                new Throwable());
+        generation++;
+        ui.post(
+                () -> {
+                    if (isDestroyed() || allowSystemFinish) return;
+                    if (current != null && !current.home && !back.isEmpty()) {
+                        cancelPageRequests();
+                        generation++;
+                        current = back.pop();
+                        renderReturn(current);
+                        restore(current);
+                    }
+                });
+    }
+
+    @Override
+    public void finish() {
+        if (allowSystemFinish || switchingPrivacy) {
+            super.finish();
+            return;
+        }
+        interceptPluginFinish();
+    }
+
+    @Override
+    public void finishAffinity() {
+        if (allowSystemFinish || switchingPrivacy) {
+            super.finishAffinity();
+            return;
+        }
+        interceptPluginFinish();
+    }
+
+    @Override
+    public void finishAndRemoveTask() {
+        if (allowSystemFinish || switchingPrivacy) {
+            super.finishAndRemoveTask();
+            return;
+        }
+        interceptPluginFinish();
+    }
+
+    void minimizePlayback() {
+        PlaybackController.minimizePlayback(this);
+    }
+
+    void expandPlayback() {
+        PlaybackController.expandPlayback(this);
+    }
+
+    void toast(String message) {
+        final FrameLayout parent = root;
+        if (parent == null) return;
+        View previous = parent.findViewWithTag("app-toast");
+        if (previous != null && previous.getParent() == parent) parent.removeView(previous);
+        TextView tip = text(message, 14, WHITE);
+        tip.setGravity(Gravity.CENTER);
+        tip.setPadding(dp(22), dp(12), dp(22), dp(12));
+        glass(tip, 22);
+        tip.setTag("app-toast");
+        FrameLayout.LayoutParams size =
+                new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        size.bottomMargin = dp(24);
+        View dock = parent.findViewWithTag("home-dock");
+        if (dock != null
+                && dock.getVisibility() == View.VISIBLE
+                && dock.getLayoutParams() instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams rail = (FrameLayout.LayoutParams) dock.getLayoutParams();
+            if ((rail.gravity & Gravity.VERTICAL_GRAVITY_MASK) == Gravity.BOTTOM) {
+                size.bottomMargin =
+                        Math.max(
+                                size.bottomMargin,
+                                Math.max(dock.getHeight(), rail.height)
+                                        + rail.bottomMargin
+                                        + dp(10));
+            } else {
+                size.rightMargin =
+                        Math.max(dock.getWidth(), rail.width) + rail.rightMargin + dp(10);
+            }
+            tip.setElevation(dock.getElevation() + dp(1));
+        }
+        android.graphics.Rect visible = new android.graphics.Rect();
+        parent.getWindowVisibleDisplayFrame(visible);
+        int[] xy = new int[2];
+        parent.getLocationOnScreen(xy);
+        size.bottomMargin =
+                Math.max(size.bottomMargin, xy[1] + parent.getHeight() - visible.bottom + dp(10));
+        tip.setMaxWidth(Math.max(dp(80), parent.getWidth() - size.rightMargin - dp(32)));
+        parent.addView(tip, size);
+        ui.postDelayed(() -> parent.removeView(tip), 2600);
+    }
+
+    void cancelPageRequests() {
+        for (Future<?> request : pageRequests) request.cancel(true);
+        pageRequests.clear();
+        ((ThreadPoolExecutor) worker).purge();
+        ((ThreadPoolExecutor) details).purge();
+    }
+
+    Future<?> submitPage(Runnable task) {
+        Future<?> request = RequestScope.submit(worker, task);
+        for (int i = pageRequests.size() - 1; i >= 0; i--) {
+            if (pageRequests.get(i).isDone()) pageRequests.remove(i);
+        }
+        pageRequests.add(request);
+        return request;
+    }
+
+    void loadDetail(Cms.Site site, String id, Done<Cms.Video> done) {
+        SourceController.loadDetail(this, site, id, done);
+    }
+
+    /** Same as {@link #loadDetail(Cms.Site, String, Done)} but reports failures to
+     * {@code onError} instead of painting the generic error UI, so the caller
+     * (detail page) can fall back to another source automatically. */
+    void loadDetail(
+            Cms.Site site,
+            String id,
+            Done<Cms.Video> done,
+            java.util.function.Consumer<Throwable> onError) {
+        SourceController.loadDetail(this, site, id, done, onError);
+    }
+
+    <T> void load(String label, Work<T> task, Done<T> done) {
+        SourceController.load(this, label, task, done);
+    }
+
+    String message(Throwable e) {
+        return SourceController.message(e);
+    }
+
+    void notice(String s) {
+        new AppDialog.Builder(this).setMessage(s).setPositiveButton("知道了", null).show();
+    }
+
+    void learnTitles(List<Cms.Video> videos) {
+        SourceController.learnTitles(this, videos);
+    }
+
+    void sourceAction(Cms.Site site, String action) {
+        SourceController.sourceAction(this, site, action);
+    }
+
+    void pickDanmaku() {
+        SourceController.pickDocument(this, 43, "這臺電視沒有檔案選擇器。");
+    }
+
+    void pickSubtitle() {
+        SourceController.pickDocument(this, 42, "這臺電視沒有檔案選擇器，可安裝檔案管理器後再匯入字幕。");
+    }
+
+    void home() {
+        if (current != null) current.home = true;
+        if (!isTvDevice()) {
+            MobileShell.show(this);
+            return;
+        }
+        Cms.Site selected = null;
+        if (config != null)
+            for (Cms.Site s : config.sites)
+                if (s.key.equals(prefs.getString(Prefs.SELECTED_SITE, "")) && available(s))
+                    selected = s;
+        if (selected != null) {
+            contentHome(selected);
+            return;
+        }
+        renderPage("把今晚，留給好故事。", "YOUR OWN CINEMA", true);
+        paragraph("屬於你的電視播放器。匯入自己合法獲取的配置，用遙控器瀏覽和播放。");
+        LinearLayout hero = row();
+        addButton(
+                hero,
+                button(
+                        config == null ? "＋ 匯入我的配置" : (isTvDevice() ? "＋ 新增新源" : "＋ 更新配置"),
+                        "primary",
+                        () -> importDialog()));
+        if (config != null) addButton(hero, button("瀏覽片庫", "primary", () -> chooseSources()));
+        addButton(
+                hero,
+                navButton("觀看歷史", "history-open", () -> open(new Screen(this::historyPage), true)));
+        body.addView(hero);
+        gap(body, 30);
+        if (config == null) {
+            paragraph("本產品僅為播放工具，不內建、不提供、不託管任何影視資源或配置地址。請自行合法獲取內容與配置，並確保擁有相應使用權。");
+            return;
+        }
+        TextView t = text("我的來源", 22, WHITE);
+        body.addView(t);
+        gap(body, 10);
+        int supported = 0;
+        for (Cms.Site s : config.sites) if (available(s)) supported++;
+        paragraph("已儲存 " + config.sites.size() + " 個來源。選擇一個，開始瀏覽。還未支援的來源會保留在列表中。");
+    }
+
+    void contentHome(Cms.Site site) {
+        if (!isTvDevice()) {
+            MobileShell.show(this);
+            return;
+        }
+        new HomeScreen(this, site).show();
+    }
+
+    void chooseSources() {
+        SourcePicker.show(this);
+    }
+
+    void importDialog() {
+        if (!isTvDevice()) {
+            MobileShell.showMobileImportDialog(this);
+            return;
+        }
+        if (phoneConfig != null) phoneConfig.close();
+        phoneConfig = new PhoneConfigDialog(this);
+        phoneConfig.show();
+    }
+
+    /** TV-only: open the phone-to-TV push receive screen (QR + LAN server). */
+    void tvPushDialog() {
+        if (!isTvDevice()) {
+            toast("手機推送接收僅在電視上開啟");
+            return;
+        }
+        if (tvPush != null) tvPush.close();
+        tvPush = new TvPushDialog(this);
+        tvPush.show();
+    }
+
+    /** TV-only: open the QR login screen (phone scans, TV signs in as the phone's account). */
+    void tvLoginDialog() {
+        if (!isTvDevice()) {
+            toast("掃碼登入僅在電視上開啟");
+            return;
+        }
+        if (tvLogin != null) tvLogin.close();
+        tvLogin = new TvLoginDialog(this);
+        tvLogin.show();
+    }
+
+    void addressImportDialog() {
+        SourceController.addressImportDialog(this);
+    }
+
+    void pickConfig() {
+        SourceController.pickDocument(this, 41, "這臺電視沒有系統檔案選擇器。請安裝檔案管理器，或使用配置地址匯入。");
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == PhonePushDialog.REQUEST_QR_SCAN) {
+            if (result == RESULT_OK && data != null && phonePush != null)
+                phonePush.onQrScanned(data.getStringExtra("qr_text"));
+            return;
+        }
+        if (request == PhoneLoginDialog.REQUEST_QR_SCAN) {
+            if (result == RESULT_OK && data != null && phoneLogin != null)
+                phoneLogin.onQrScanned(data.getStringExtra("qr_text"));
+            return;
+        }
+        SourceController.onActivityResult(this, request, result, data);
+    }
+
+    void saveConfig(Cms.Config c, String origin) throws Exception {
+        SourceController.saveConfig(this, c, origin);
+    }
+
+    void categories(Cms.Site s) {
+        CatalogScreen.categories(this, s);
+    }
+
+    void searchDialog(Cms.Site s) {
+        globalSearchDialog();
+    }
+
+    void videos(Cms.Site s, String cat, String title, int page, String search) {
+        CatalogScreen.videos(this, s, cat, title, page, search);
+    }
+
+    void cancelArtwork() {
+        ImageLoader.cancel(this);
+    }
+
+    void poster(String address, ImageView image) {
+        poster(address, image, false);
+    }
+
+    void poster(String address, ImageView image, boolean detail) {
+        ImageLoader.poster(this, address, image, detail);
+    }
+
+    void detail(Cms.Site s, Cms.Video listing) {
+        detail(s, listing, null);
+    }
+
+    void detail(Cms.Site s, Cms.Video listing, Cms.Video ready) {
+        if (!isTvDevice()) {
+            MobileDetailScreen.show(this, s, listing, ready);
+            return;
+        }
+        DetailScreen.show(this, s, listing, ready);
+    }
+
+    void renderEpisodes(
+            Cms.Site site, Cms.Video video, int lineIndex, int page, LinearLayout panel) {
+        DetailScreen.renderEpisodes(this, site, video, lineIndex, page, panel, null);
+    }
+
+    void liveSources() {
+        if (!isTvDevice()) {
+            MobileShell.activeTab = 2;
+            open(new Screen(this::home), false);
+            return;
+        }
+        LiveController.liveSources(this);
+    }
+
+    void playLive(
+            LiveCatalog.Source source, LiveCatalog.Channel channel, LiveCatalog.Stream stream) {
+        LiveController.playLive(this, source, channel, stream);
+    }
+
+    boolean isLive() {
+        return LiveController.isLive(this);
+    }
+
+    boolean liveStep(int direction) {
+        return LiveController.liveStep(this, direction);
+    }
+
+    void chooseLiveChannel() {
+        LiveController.chooseLiveChannel(this);
+    }
+
+    void chooseLiveStream() {
+        LiveController.chooseLiveStream(this);
+    }
+
+    void clearLiveNumber() {
+        LiveController.clearLiveNumber(this);
+    }
+
+    void commitLiveNumber() {
+        LiveController.commitLiveNumber(this);
+    }
+
+    boolean liveKey(KeyEvent event) {
+        return LiveController.liveKey(this, event);
+    }
+
+    void globalSearchDialog() {
+        openSearch("");
+    }
+
+    void openSearch(String initial) {
+        if (config == null) {
+            importDialog();
+            return;
+        }
+        if (!isTvDevice()) {
+            MobileShell.openSearchTab(this, initial);
+            return;
+        }
+        GlobalSearchScreen screen = new GlobalSearchScreen(this, initial);
+        open(
+                new Screen(
+                        () -> {
+                            screen.show();
+                            searchScreen = screen;
+                        }),
+                true);
+    }
+
+    void crossSearch(String keyword) {
+        openSearch(keyword);
+    }
+
+    void stopMagnet() {
+        PlaybackController.stopMagnet(this);
+    }
+
+    void stopWeb() {
+        PlaybackController.stopWeb(this);
+    }
+
+    void resolvePlayer(Cms.Site s, Cms.Video v, Cms.Line line, Cms.Episode ep) {
+        PlaybackController.resolvePlayer(this, s, v, line, ep);
+    }
+
+    void clearPlaybackLoading() {
+        PlaybackController.clearPlaybackLoading(this);
+    }
+
+    void openPlayer(Cms.Site s, Cms.Video v, Cms.Episode e) {
+        PlaybackController.openPlayer(this, s, v, e);
+    }
+
+    void playerPage(Cms.Site s, Cms.Video v, Cms.Episode ep) {
+        PlaybackController.playerPage(this, s, v, ep);
+    }
+
+    void changeEpisode(
+            Cms.Site site, Cms.Video video, Cms.Line line, Cms.Episode episode, int position) {
+        PlaybackController.changeEpisode(this, site, video, line, episode, position);
+    }
+
+    void leavePlayback() {
+        PlaybackController.leavePlayback(this);
+    }
+
+    void showControls(boolean visible) {
+        PlaybackController.showControls(this, visible);
+    }
+
+    void scheduleHide() {
+        PlaybackController.scheduleHide(this);
+    }
+
+    String time(int ms) {
+        return PlaybackController.formatTime(ms);
+    }
+
+    void togglePlayback() {
+        PlaybackController.togglePlayback(this);
+    }
+
+    void beginSeek(int direction) {
+        PlaybackController.beginSeek(this, direction);
+    }
+
+    void previewSeek() {
+        PlaybackController.previewSeek(this);
+    }
+
+    void finishSeek(boolean commit) {
+        PlaybackController.finishSeek(this, commit);
+    }
+
+    java.util.List<WatchHistory.Entry> watchHistory() {
+        return privateMode
+                ? java.util.Collections.emptyList()
+                : WatchHistory.read(prefs.getString(Prefs.WATCH_HISTORY, "[]"));
+    }
+
+    void savePlaybackHistory(boolean force) {
+        PlaybackController.savePlaybackHistory(this, force);
+    }
+
+    String historyLabel(WatchHistory.Entry e) {
+        return CatalogScreen.historyLabel(e);
+    }
+
+    void resumeHistory(WatchHistory.Entry e) {
+        CatalogScreen.resumeHistory(this, e);
+    }
+
+    void playBookmark(Cms.Site site, Cms.Video video, WatchHistory.Entry bookmark) {
+        CatalogScreen.playBookmark(this, site, video, bookmark);
+    }
+
+    void historyPage() {
+        CatalogScreen.historyPage(this);
+    }
+
+    void releasePlayer() {
+        PlaybackController.releasePlayer(this);
+    }
+
+    void smoothHomeScroll(int y) {
+        if (scroll instanceof TvScrollView) ((TvScrollView) scroll).moveTo(y);
+        else if (reduced) scroll.scrollTo(0, y);
+        else scroll.smoothScrollTo(0, y);
+    }
+
+    void jumpHomeTop() {
+        if (current == null || !current.home || scroll == null) return;
+        View target = root.findViewWithTag("home-history:0");
+        if (target == null) target = root.findViewWithTag("home-tab:0");
+        if (target == null) target = root.findViewWithTag("source-switcher");
+        if (target == null) target = root.findViewWithTag("primary");
+        if (target != null) target.requestFocus();
+        current.scroll = 0;
+        smoothHomeScroll(0);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (introSkipKey && event.getAction() == KeyEvent.ACTION_UP) {
+            introSkipKey = false;
+            return true;
+        }
+        if (startupIntro != null) {
+            int key = event.getKeyCode();
+            if (event.getAction() == KeyEvent.ACTION_DOWN
+                    && (key == KeyEvent.KEYCODE_DPAD_CENTER
+                            || key == KeyEvent.KEYCODE_ENTER
+                            || key == KeyEvent.KEYCODE_BACK)) {
+                introSkipKey = true;
+                startupIntro.finish(true);
+            }
+            return true;
+        }
+
+        if (shortcutScreen != current) {
+            homeKeys.reset();
+            shortcutScreen = current;
+        }
+        if (current != null && current.home) {
+            int key = event.getKeyCode();
+            if (key == KeyEvent.KEYCODE_MENU) {
+                homeKeys.reset();
+                if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) chooseSources();
+                return true;
+            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (key == KeyEvent.KEYCODE_DPAD_UP) {
+                    if (homeKeys.up(event.getEventTime(), event.getRepeatCount())) {
+                        jumpHomeTop();
+                        return true;
+                    }
+                } else homeKeys.reset();
+            }
+        }
+        if (liveKey(event)) return true;
+        View feedbackFocus = getCurrentFocus();
+        if (feedbackFocus != null) FocusMotion.key(this, feedbackFocus, event.getKeyCode(), event);
+        if (current != null && current.home && homeDock != null && homeDock.key(event)) return true;
+        if (current != null && current.home && HomeScreen.navigationKey(this, event)) return true;
+        if (PlaybackController.dispatchPlaybackKey(this, event)) return true;
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean focus) {
+        super.onWindowFocusChanged(focus);
+        if (!focus) {
+            finishSeek(false);
+            PluginDialogStyler.watch(this);
+        }
+        SourceController.onActivityFocusChanged(this, focus);
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        ImageLoader.trimMemory(this, level);
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        images.evictAll();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        activeActivity = this;
+        foreground = true;
+        CspEngine.syncAllPluginActivities(this);
+        UpdateManager.get(this)
+                .listen(
+                        () -> {
+                            if (updateScreen != null) updateScreen.refresh();
+                            if (foreground
+                                    && current != null
+                                    && current.home
+                                    && appDialog == null
+                                    && UpdateManager.get(this).consumeNotice())
+                                toast("發現新版，可在設定 → 軟體更新檢視");
+                        });
+        ui.removeCallbacks(automaticUpdate);
+        ui.postDelayed(automaticUpdate, 4000);
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (!privateMode) handleSupabaseCallback(intent);
+    }
+
+    /** Handle the Supabase Google sign-in callback (mkoai://login-callback). */
+    void handleSupabaseCallback(android.content.Intent intent) {
+        if (intent == null || intent.getData() == null) return;
+        if (!SupabaseAuth.isLoginCallback(intent.getData())) return;
+        boolean ok = SupabaseAuth.handleCallback(this, intent.getData());
+        if (ok) {
+            toast("已登入 " + (SupabaseAuth.email(this) == null ? "" : SupabaseAuth.email(this)));
+            // mkoai: rebuild the current screen so the header login button becomes the
+            // email initial (it is built once when the header is created).
+            refresh();
+            SupabaseSync.syncNow(this);
+        } else {
+            toast("登入失敗，請重試");
+        }
+    }
+
+    protected void onResume() {
+        super.onResume();
+        activeActivity = this;
+        foreground = true;
+        CspEngine.syncAllPluginActivities(this);
+        // mkoai 2.0.43: 回到前景自動下拉合併（SupabaseSync 內 60 秒節流；播放中不拉，
+        // 免得寫入歷史打斷播放）。App 啟動下載與手動「立即同步」不受影響。
+        if (!privateMode && !playing) SupabaseSync.downloadOnResume(this);
+    }
+
+    @Override
+    protected void onPause() {
+        savePlaybackHistory(true);
+        super.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        PrivacySpace.cancelPrompt(this);
+        finishSeek(false);
+        if (playbackLoading != null) {
+            clearPlaybackLoading();
+            cancelPageRequests();
+            stopWeb();
+        }
+        UpdateManager.get(this).listen(null);
+        ui.removeCallbacks(automaticUpdate);
+        if (phoneConfig != null) {
+            PhoneConfigDialog session = phoneConfig;
+            session.close();
+            if (session.dialog != null) session.dialog.dismiss();
+        }
+        clearLiveNumber();
+        if (startupIntro != null) startupIntro.cancel();
+        introSkipKey = false;
+        savePlaybackHistory(true);
+        foreground = false;
+        super.onStop();
+        if (player != null)
+            try {
+                player.pause();
+                playing = false;
+                if (embyReporter != null) embyReporter.update(player.getCurrentPosition(), true);
+                if (playStatus != null) playStatus.setText("已暫停 · 按確認繼續");
+            } catch (Exception ignored) {
+            }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (privateMode && isFinishing() && !switchingPrivacy) {
+            MobileShell.clearSearchSession();
+            PrivacySpace.active = false;
+        }
+        if (activeActivity == this) activeActivity = null;
+        clearPlaybackLoading();
+        if (phoneConfig != null) phoneConfig.close();
+        if (startupIntro != null) startupIntro.cancel();
+        if (searchScreen != null) searchScreen.close();
+        stopWeb();
+        stopMagnet();
+        generation++;
+        releasePlayer();
+        closeEngines();
+        cancelArtwork();
+        cancelPageRequests();
+        details.shutdownNow();
+        worker.shutdownNow();
+        artwork.shutdownNow();
+        phoneticWork.shutdownNow();
+        ui.removeCallbacksAndMessages(null);
+        images.evictAll();
+        super.onDestroy();
+    }
+
+    void settings() {
+        new SettingsScreen(this).show();
+    }
+}
