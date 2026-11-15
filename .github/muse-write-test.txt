@@ -1,0 +1,2 @@
+Muse GitHub API write test — 2026-11-15 10:18 CST.
+This file tests that the Muse fine-grained token (Contents read/write) can create files in maomao0522/mkoai. Safe to delete.
