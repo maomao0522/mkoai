@@ -1397,6 +1397,70 @@ final class MobileIosSettings {
                         .addChild(cacheDiagSub);
         top.add(dataPane);
 
+        // mkoai 2.0.62: analytics opt-out + ntfy push test. The switch only
+        // flips the Prefs flag — PostHogClient.capture reads it and no-ops
+        // when off. The test push never retries: ntfy is rate-limited today,
+        // so a failure is expected and just shown.
+        PaneSpec analyticsNotifySub =
+                new PaneSpec(
+                        "分析與通知",
+                        "匿名使用統計開關與推播測試",
+                        ICON_INFO,
+                        COLOR_INDIGO,
+                        (body, ctl) -> {
+                            addSwitchRow(
+                                    a,
+                                    body,
+                                    ICON_INFO,
+                                    COLOR_INDIGO,
+                                    "使用分析",
+                                    "匿名統計 App 使用情況，協助改善體驗；可隨時關閉",
+                                    Prefs.ANALYTICS_ENABLED,
+                                    true,
+                                    false,
+                                    null);
+                            addActionCapsule(
+                                    a,
+                                    body,
+                                    ICON_CLOUD,
+                                    COLOR_TEAL,
+                                    "推播測試",
+                                    "發送一則測試通知到 ntfy",
+                                    () ->
+                                            a.worker.execute(
+                                                    () -> {
+                                                        try {
+                                                            NotifyClient.sendTest(
+                                                                    "mkoai 測試通知",
+                                                                    "這是 mkoai 的推播測試。");
+                                                            a.ui.post(
+                                                                    () ->
+                                                                            a.toast(
+                                                                                    "已發送測試通知"));
+                                                        } catch (Exception e) {
+                                                            final String reason =
+                                                                    e.getMessage() == null
+                                                                            ? "未知原因"
+                                                                            : e.getMessage();
+                                                            a.ui.post(
+                                                                    () ->
+                                                                            a.toast(
+                                                                                    "推播測試失敗："
+                                                                                            + reason));
+                                                        }
+                                                    }));
+                            TextView topicText =
+                                    a.text(
+                                            "ntfy topic："
+                                                    + NotifyClient.TOPIC
+                                                    + "\n在 ntfy App 訂閱這個 topic 才收得到通知",
+                                            13f,
+                                            0xff9ca3af);
+                            topicText.setPadding(a.dp(2), a.dp(6), a.dp(2), 0);
+                            body.addView(topicText, new LinearLayout.LayoutParams(-1, -2));
+                        });
+        dataPane.addChild(analyticsNotifySub);
+
         // 6. 关于与更新 (Info Circle, #5E5CE6)
         PaneSpec aboutPane =
                 new PaneSpec(

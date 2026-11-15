@@ -2768,8 +2768,22 @@ final class MobileShell {
                             // (direct Douban; no Worker route for it yet) —
                             // not a TmdbClient kind. A failed fetch yields
                             // null (job cancelled/failed) and the row hides.
+                            // mkoai 2.0.62: the external-ranking rows are
+                            // fetched the same way (Trakt / Simkl / TVmaze
+                            // fetchers, one job each, same BoundedBatch —
+                            // 4 threads / 12s shared budget, no extra pool).
                             if (HomeRows2061.isDoubanRow(row.kind))
                                 metadataJobs.add(() -> DoubanHome.fetchTopRatedItems());
+                            else if (HomeRows2061.KIND_TRAKT_MOVIES.equals(row.kind))
+                                metadataJobs.add(() -> TraktHome.fetchMoviesItems());
+                            else if (HomeRows2061.KIND_TRAKT_SHOWS.equals(row.kind))
+                                metadataJobs.add(() -> TraktHome.fetchShowsItems());
+                            else if (HomeRows2061.KIND_SIMKL_MOVIES.equals(row.kind))
+                                metadataJobs.add(() -> SimklHome.fetchMoviesItems());
+                            else if (HomeRows2061.KIND_SIMKL_SHOWS.equals(row.kind))
+                                metadataJobs.add(() -> SimklHome.fetchTvItems());
+                            else if (HomeRows2061.KIND_TVMAZE_TONIGHT.equals(row.kind))
+                                metadataJobs.add(() -> TvmazeHome.fetchTonightItems());
                             else
                                 metadataJobs.add(
                                         () -> TmdbClient.list(filesDir, row.kind, row.extra));
@@ -2799,7 +2813,32 @@ final class MobileShell {
                                 // mkoai 2.0.61: 豆瓣高分 cards come from
                                 // Douban, not TMDB — tag them so the
                                 // detail/search flow treats them as such.
+                                // mkoai 2.0.62: same for the external
+                                // rankings (tag = provider, so
+                                // VideoKind2061 / the detail flow can
+                                // tell them apart); the row kind itself
+                                // is the movie/series fallback when the
+                                // fetcher left Item.type empty, so the
+                                // 電影/劇 badge still shows. TVmaze
+                                // airtime replaces the ★ rating remarks —
+                                // when it airs matters more than its score.
                                 if (HomeRows2061.isDoubanRow(row.kind)) v.tag = "douban";
+                                else if (HomeRows2061.isTraktRow(row.kind)) v.tag = "trakt";
+                                else if (HomeRows2061.isSimklRow(row.kind)) v.tag = "simkl";
+                                else if (HomeRows2061.isTvmazeRow(row.kind)) {
+                                    v.tag = "tvmaze";
+                                    if (it.airInfo != null && !it.airInfo.isEmpty())
+                                        v.remarks = it.airInfo;
+                                }
+                                if ((v.mediaType == null || v.mediaType.isEmpty())
+                                        && HomeRows2061.isExternalRow(row.kind)) {
+                                    v.mediaType =
+                                            HomeRows2061.KIND_TRAKT_MOVIES.equals(row.kind)
+                                                            || HomeRows2061.KIND_SIMKL_MOVIES
+                                                                    .equals(row.kind)
+                                                    ? "movie"
+                                                    : "tv";
+                                }
                                 if (v.title == null || v.title.isEmpty()) continue;
                                 AwwratedHome.CrossHit hit =
                                         AwwratedHome.cachedHitAny(disk, apiKeys, v.title, now);

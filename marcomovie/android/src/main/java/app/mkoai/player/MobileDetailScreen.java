@@ -1,7 +1,10 @@
 package app.mkoai.player;
 
 import android.app.Dialog;
+import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
@@ -29,15 +32,23 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import com.pilipala.glass.GlassworkSurface;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.json.JSONObject;
 
 /**
  * iPhone / Apple TV+ / Infuse 1:1 portrait & tablet immersive video detail screen:
@@ -52,6 +63,21 @@ import java.util.regex.Pattern;
  */
 final class MobileDetailScreen {
     private MobileDetailScreen() {}
+
+    // mkoai 2.0.62: last OMDb payload for the detail page now showing (single
+    // entry, keyed by normalized title). updateRatingBadges() is re-called by
+    // the Douban resolver after the OMDb fetch lands; without this the
+    // OMDb-priority Rotten Tomatoes value would revert to the regex fallback.
+    // Fail-soft by design: null = no OMDb data yet, regex fallback applies.
+    private static String sOmdbTitleKey;
+    private static JSONObject sOmdbData;
+
+    private static JSONObject cachedOmdbFor(Cms.Video v) {
+        if (v == null || v.title == null || sOmdbData == null || sOmdbTitleKey == null) {
+            return null;
+        }
+        return sOmdbTitleKey.equals(Cms.normTitle(v.title)) ? sOmdbData : null;
+    }
 
     static void bindTouchFeedback(View v) {
         v.setFocusable(false);
@@ -655,6 +681,19 @@ final class MobileDetailScreen {
                 new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         heroStage.addView(heroCenterCol, heroCenterLp);
 
+        // mkoai 2.0.62: Fanart clear logo, shown above the title once the
+        // Fanart fetch lands. GONE (zero size) until then — never an empty slot.
+        final ImageView fanartLogoView = new ImageView(a);
+        fanartLogoView.setTag("detail-fanart-logo");
+        fanartLogoView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        fanartLogoView.setAdjustViewBounds(true);
+        fanartLogoView.setVisibility(View.GONE);
+        LinearLayout.LayoutParams logoLp =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, a.dp(64));
+        logoLp.bottomMargin = a.dp(6);
+        heroCenterCol.addView(fanartLogoView, logoLp);
+
         final TextView titleView = a.text(listing.title, 28, MainActivity.WHITE);
         titleView.setTag("detail-title");
         titleView.setTypeface(null, Typeface.BOLD);
@@ -715,6 +754,28 @@ final class MobileDetailScreen {
         LinearLayout.LayoutParams rtLp = new LinearLayout.LayoutParams(-2, -2);
         rtLp.rightMargin = a.dp(7);
         ratingRow.addView(rtBadge, rtLp);
+
+        // mkoai 2.0.62: OMDb ratings — IMDb + Metacritic, same badge style.
+        // Hidden until the OMDb fetch lands; updateRatingBadges() fills them.
+        final TextView imdbBadge = a.text("", 11.5f, 0xfffde68a);
+        imdbBadge.setTag("detail-imdb-rating");
+        imdbBadge.setTypeface(null, Typeface.BOLD);
+        imdbBadge.setPadding(a.dp(9), a.dp(3), a.dp(9), a.dp(3));
+        imdbBadge.setBackground(glassBg(a, 0x38f5c518, 0x66fbbf24, 999));
+        imdbBadge.setVisibility(View.GONE);
+        LinearLayout.LayoutParams imdbLp = new LinearLayout.LayoutParams(-2, -2);
+        imdbLp.rightMargin = a.dp(7);
+        ratingRow.addView(imdbBadge, imdbLp);
+
+        final TextView mcBadge = a.text("", 11.5f, 0xffa5b4fc);
+        mcBadge.setTag("detail-mc-rating");
+        mcBadge.setTypeface(null, Typeface.BOLD);
+        mcBadge.setPadding(a.dp(9), a.dp(3), a.dp(9), a.dp(3));
+        mcBadge.setBackground(glassBg(a, 0x384c6ef5, 0x666080f0, 999));
+        mcBadge.setVisibility(View.GONE);
+        LinearLayout.LayoutParams mcLp = new LinearLayout.LayoutParams(-2, -2);
+        mcLp.rightMargin = a.dp(7);
+        ratingRow.addView(mcBadge, mcLp);
 
         TextView siteBadge = a.text(s.name, 11.5f, 0xe6ffffff);
         siteBadge.setPadding(a.dp(9), a.dp(3), a.dp(9), a.dp(3));
@@ -855,6 +916,13 @@ final class MobileDetailScreen {
                     synopsisWrap.removeAllViews();
                     playBtnWrap.removeAllViews();
                     detailsBody.removeAllViews();
+                    // mkoai 2.0.62: drop the previous extras box (TVmaze line +
+                    // translate button + translated text) so a re-present never
+                    // duplicates it; it is rebuilt below.
+                    View oldExtras = a.root.findViewWithTag("detail-extras-box");
+                    if (oldExtras != null && oldExtras.getParent() instanceof ViewGroup) {
+                        ((ViewGroup) oldExtras.getParent()).removeView(oldExtras);
+                    }
 
                     for (java.util.Iterator<Cms.Line> it = v.lines.iterator(); it.hasNext(); ) {
                         Cms.Line line = it.next();
@@ -952,6 +1020,92 @@ final class MobileDetailScreen {
                                     }
                                 });
                     }
+
+                    // mkoai 2.0.62: extras box under the synopsis — TVmaze airing
+                    // info (TV only, filled by enrichDetailExtras), the
+                    // translate button (non-Chinese synopsis only) and the
+                    // translated text (shown under the original, never over it).
+                    // All three start GONE; the box itself is rebuilt on every
+                    // present so a re-present never duplicates it.
+                    final LinearLayout extrasBox = a.vertical();
+                    extrasBox.setTag("detail-extras-box");
+                    extrasBox.setGravity(Gravity.CENTER_HORIZONTAL);
+                    final TextView tvmazeInfo = a.text("", 12.5f, 0xccffffff);
+                    tvmazeInfo.setTag("detail-tvmaze-info");
+                    tvmazeInfo.setGravity(Gravity.CENTER);
+                    tvmazeInfo.setVisibility(View.GONE);
+                    tvmazeInfo.setPadding(0, a.dp(8), 0, 0);
+                    extrasBox.addView(tvmazeInfo, new LinearLayout.LayoutParams(-1, -2));
+                    final TextView translateBtn = a.text("🌐  翻譯簡介", 13, 0xccffffff);
+                    translateBtn.setTag("detail-translate-btn");
+                    translateBtn.setGravity(Gravity.CENTER);
+                    translateBtn.setPadding(a.dp(8), a.dp(10), a.dp(8), 0);
+                    translateBtn.setVisibility(View.GONE);
+                    bindTouchFeedback(translateBtn);
+                    translateBtn.setOnClickListener(
+                            view -> {
+                                TextView currentDesc =
+                                        (TextView) a.root.findViewWithTag("detail-synopsis");
+                                String overview =
+                                        currentDesc == null
+                                                ? ""
+                                                : currentDesc.getText().toString();
+                                if (overview.trim().isEmpty()) return;
+                                translateBtn.setEnabled(false);
+                                a.toast("正在翻譯簡介…");
+                                a.submitPage(
+                                        () -> {
+                                            try {
+                                                final String translated =
+                                                        TranslateClient.translate(overview.trim());
+                                                a.ui.post(
+                                                        () -> {
+                                                            translateBtn.setEnabled(true);
+                                                            if (a.isFinishing()
+                                                                    || a.root == null
+                                                                    || !isSameDetailPage(
+                                                                            a, v.title)) {
+                                                                return;
+                                                            }
+                                                            TextView translatedTv =
+                                                                    (TextView)
+                                                                            a.root.findViewWithTag(
+                                                                                    "detail-synopsis-translated");
+                                                            if (translatedTv == null) return;
+                                                            if (translated == null
+                                                                    || translated.trim().isEmpty()) {
+                                                                a.toast("翻譯失敗，請稍後再試");
+                                                                return;
+                                                            }
+                                                            translatedTv.setText(
+                                                                    translated.trim());
+                                                            translatedTv.setVisibility(
+                                                                    View.VISIBLE);
+                                                            translateBtn.setVisibility(View.GONE);
+                                                        });
+                                            } catch (Throwable t) {
+                                                a.ui.post(
+                                                        () -> {
+                                                            translateBtn.setEnabled(true);
+                                                            a.toast("翻譯失敗，請稍後再試");
+                                                        });
+                                            }
+                                        });
+                            });
+                    extrasBox.addView(translateBtn, new LinearLayout.LayoutParams(-1, -2));
+                    final TextView translatedTv = a.text("", 13.5f, 0x99ffffff);
+                    translatedTv.setTag("detail-synopsis-translated");
+                    translatedTv.setGravity(Gravity.CENTER);
+                    translatedTv.setLineSpacing(a.dp(3.5f), 1f);
+                    translatedTv.setVisibility(View.GONE);
+                    translatedTv.setPadding(0, a.dp(6), 0, 0);
+                    extrasBox.addView(translatedTv, new LinearLayout.LayoutParams(-1, -2));
+                    int synopsisIndex = lowerBody.indexOfChild(synopsisWrap);
+                    lowerBody.addView(
+                            extrasBox,
+                            synopsisIndex >= 0 ? synopsisIndex + 1 : 0,
+                            new LinearLayout.LayoutParams(-1, -2));
+                    refreshTranslateButton(a);
 
                     if (v.lines.isEmpty()) {
                         TextView empty = a.text("這個片源沒有可播的劇集，正在自動尋找其他片源…", 14, 0xb3ffffff);
@@ -1118,6 +1272,54 @@ final class MobileDetailScreen {
                                         });
                             });
                     playBtnWrap.addView(sourceBtn, new LinearLayout.LayoutParams(-1, -2));
+
+                    // mkoai 2.0.62: trailer button — same subtle line style as
+                    // the source picker. Search runs in the background; the
+                    // result list opens YouTube in the browser. YoutubeClient
+                    // caches one search per title per session, so reopening
+                    // the list never re-queries.
+                    TextView trailerBtn = a.text("🎬  預告片 · YouTube", 13, 0xccffffff);
+                    trailerBtn.setTag("detail-trailer");
+                    trailerBtn.setGravity(Gravity.CENTER);
+                    trailerBtn.setPadding(a.dp(8), a.dp(10), a.dp(8), 0);
+                    bindTouchFeedback(trailerBtn);
+                    trailerBtn.setOnClickListener(
+                            view -> {
+                                a.toast("正在搜尋預告片…");
+                                final String queryTitle = v.title;
+                                a.submitPage(
+                                        () -> {
+                                            final List<YoutubeClient.Trailer> trailers;
+                                            try {
+                                                trailers = YoutubeClient.search(queryTitle);
+                                            } catch (WorkerApi.RateLimited rateLimited) {
+                                                a.ui.post(
+                                                        () ->
+                                                                a.toast(
+                                                                        "YouTube 額度用完，午夜太平洋時間重置"));
+                                                return;
+                                            } catch (Throwable t) {
+                                                a.ui.post(
+                                                        () ->
+                                                                a.toast(
+                                                                        "預告片搜尋失敗，請稍後再試"));
+                                                return;
+                                            }
+                                            a.ui.post(
+                                                    () -> {
+                                                        if (a.isFinishing() || a.root == null) {
+                                                            return;
+                                                        }
+                                                        if (trailers == null
+                                                                || trailers.isEmpty()) {
+                                                            a.toast("沒有找到預告片");
+                                                            return;
+                                                        }
+                                                        showTrailerList(a, queryTitle, trailers);
+                                                    });
+                                        });
+                            });
+                    playBtnWrap.addView(trailerBtn, new LinearLayout.LayoutParams(-1, -2));
 
                     // mkoai 2.0.38 (Emby style): the line picker is a subtle
                     // tappable line, not a card row. Its text and dialog are
@@ -2706,7 +2908,13 @@ final class MobileDetailScreen {
                 () -> {
                     try {
                         TmdbClient.Item hit = TmdbClient.search(a.getFilesDir(), title, year);
-                        if (hit == null) return;
+                        if (hit == null) {
+                            // mkoai 2.0.62: no TMDB hit — still run the
+                            // title-based extras (OMDb by title; TVmaze for
+                            // series). Fanart needs an id, so it is skipped.
+                            enrichDetailExtras(a, s, v, 0, null);
+                            return;
+                        }
                         TmdbClient.Item full = TmdbClient.enrich(a.getFilesDir(), hit);
                         if (full == null) full = hit;
                         final TmdbClient.Item item = full;
@@ -2732,6 +2940,11 @@ final class MobileDetailScreen {
 
     private static void applyTmdbToDetail(
             MainActivity a, Cms.Site s, Cms.Video v, TmdbClient.Item item) {
+        // mkoai 2.0.62: keep the TMDB id — the OMDb / Fanart lookups below
+        // (and TmdbClient.toVideo, when it lands the same assignment) need it.
+        // toVideo already sets v.tmdbId when the card came from a TMDB row;
+        // writing the same value again here is harmless.
+        v.tmdbId = item.id;
         // Poster: swap to the TMDB (Chinese) poster + HD resolve. The
         // backdrop follows automatically via PosterHookImageView.
         if (item.poster != null
@@ -2812,6 +3025,423 @@ final class MobileDetailScreen {
                 updateMetaLine(metaLine, v, s.name, item.vote);
             }
         }
+        // mkoai 2.0.62: the overview may have just changed — re-decide
+        // whether the translate button shows, then run the OMDb / Fanart /
+        // TVmaze enrichment in the background (fail-soft, never blocks).
+        refreshTranslateButton(a);
+        enrichDetailExtras(a, s, v, item.id, item.type);
+    }
+
+    /** Still the same detail page? Compares the shown (s2t) title, normalized. */
+    private static boolean isSameDetailPage(MainActivity a, String title) {
+        if (a == null || a.root == null || title == null) return false;
+        TextView titleView = (TextView) a.root.findViewWithTag("detail-title");
+        if (titleView == null) return false;
+        return Cms.normTitle(ChineseConvert.s2t(title))
+                .equals(Cms.normTitle(titleView.getText().toString()));
+    }
+
+    private static boolean containsChinese(String text) {
+        if (text == null) return false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c >= '\u4e00' && c <= '\u9fff') return true;
+        }
+        return false;
+    }
+
+    /**
+     * mkoai 2.0.62: show the translate button only when the current synopsis
+     * is non-empty and contains no CJK characters. Runs after present builds
+     * the synopsis and after applyTmdbToDetail replaces it.
+     */
+    private static void refreshTranslateButton(MainActivity a) {
+        if (a == null || a.root == null) return;
+        TextView btn = (TextView) a.root.findViewWithTag("detail-translate-btn");
+        if (btn == null) return;
+        TextView translatedTv =
+                (TextView) a.root.findViewWithTag("detail-synopsis-translated");
+        if (translatedTv != null && translatedTv.getVisibility() == View.VISIBLE) {
+            btn.setVisibility(View.GONE);
+            return;
+        }
+        TextView descTv = (TextView) a.root.findViewWithTag("detail-synopsis");
+        String overview = descTv == null ? "" : descTv.getText().toString();
+        boolean show =
+                overview != null && !overview.trim().isEmpty() && !containsChinese(overview);
+        btn.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
+    /** Douban score currently shown on the page (0.0 when the badge is hidden). */
+    private static double currentDoubanScore(MainActivity a) {
+        if (a == null || a.root == null) return 0.0;
+        TextView db = (TextView) a.root.findViewWithTag("detail-douban-rating");
+        if (db == null || db.getVisibility() != View.VISIBLE) return 0.0;
+        Matcher m =
+                Pattern.compile("★\\s*([0-9]+(?:\\.[0-9])?)")
+                        .matcher(db.getText().toString());
+        if (m.find()) {
+            try {
+                double d = Double.parseDouble(m.group(1));
+                if (d >= 2.0 && d <= 10.0) return d;
+            } catch (Exception ignored) {
+            }
+        }
+        return 0.0;
+    }
+
+    /** Trailer list dialog: tap opens the video in the browser (ACTION_VIEW). */
+    private static void showTrailerList(
+            MainActivity a, String title, List<YoutubeClient.Trailer> trailers) {
+        String[] names = new String[trailers.size()];
+        for (int i = 0; i < trailers.size(); i++) {
+            YoutubeClient.Trailer t = trailers.get(i);
+            String line = t.title == null ? "" : t.title;
+            if (t.channel != null && !t.channel.isEmpty()) line += " — " + t.channel;
+            names[i] = line;
+        }
+        new AppDialog.Builder(a)
+                .wrapChoices()
+                .setTitle("預告片")
+                .setItems(
+                        names,
+                        (d, index) -> {
+                            if (index < 0 || index >= trailers.size()) return;
+                            YoutubeClient.Trailer t = trailers.get(index);
+                            if (t.videoId == null || t.videoId.isEmpty()) return;
+                            try {
+                                JSONObject props = new JSONObject();
+                                props.put("title", title);
+                                PostHogClient.capture("trailer_open", props);
+                            } catch (Exception ignored) {
+                            }
+                            try {
+                                Intent intent =
+                                        new Intent(
+                                                Intent.ACTION_VIEW,
+                                                Uri.parse(YoutubeClient.watchUrl(t.videoId)));
+                                a.startActivity(intent);
+                            } catch (Exception e) {
+                                AppLog.w("MobileDetailScreen", "open trailer failed", e);
+                                a.toast("無法開啟 YouTube");
+                            }
+                        })
+                .show();
+    }
+
+    /**
+     * mkoai 2.0.62: OMDb ratings + Fanart artwork + TVmaze airing info, all in
+     * one background pass. Every step is fail-soft: a miss hides its badge /
+     * view and leaves the page exactly as it was. Runs after the TMDB hit
+     * (tmdbId &gt; 0) and also after a TMDB miss (tmdbId == 0: OMDb falls back
+     * to a title lookup, Fanart is skipped, TVmaze still runs for series).
+     */
+    private static void enrichDetailExtras(
+            final MainActivity a,
+            final Cms.Site s,
+            final Cms.Video v,
+            final int tmdbId,
+            final String tmdbType) {
+        if (a == null || s == null || v == null || v.title == null || v.title.isEmpty()) return;
+        final String title = v.title;
+        final int gen = a.generation;
+        final boolean isTv =
+                "tv".equals(tmdbType) || VideoKind2061.kindOf(v) == VideoKind2061.SERIES;
+        final String tmdbKind =
+                "tv".equals(tmdbType)
+                        ? "tv"
+                        : ("movie".equals(tmdbType) ? "movie" : (isTv ? "tv" : "movie"));
+        a.submitPage(
+                () -> {
+                    try {
+                        // OMDb: TMDB external imdb_id first, title fallback.
+                        JSONObject omdb = null;
+                        try {
+                            String imdbId = null;
+                            if (tmdbId > 0) {
+                                try {
+                                    imdbId =
+                                            TmdbClient.externalImdbId(
+                                                    a.getFilesDir(), tmdbKind, tmdbId);
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                            omdb =
+                                    (imdbId != null && !imdbId.isEmpty())
+                                            ? OmdbClient.fetchByImdbId(imdbId)
+                                            : OmdbClient.fetchByTitle(title);
+                        } catch (Throwable ignored) {
+                        }
+
+                        // Fanart: movies take the TMDB id; TV takes the TVDB id
+                        // (TMDB external ids first, TVmaze externals as fallback).
+                        JSONObject fanart = null;
+                        String fanartBg = null;
+                        String fanartLogo = null;
+                        JSONObject tvShow = null;
+                        try {
+                            if (tmdbId > 0) {
+                                if (isTv) {
+                                    String tvdbId = null;
+                                    try {
+                                        // externalTvdbId returns Integer (not
+                                        // String): null when absent.
+                                        Integer tvdb =
+                                                TmdbClient.externalTvdbId(
+                                                        a.getFilesDir(), tmdbId);
+                                        if (tvdb != null) tvdbId = String.valueOf(tvdb);
+                                    } catch (Throwable ignored) {
+                                    }
+                                    if (tvdbId == null || tvdbId.isEmpty()) {
+                                        try {
+                                            tvShow = TvmazeHome.searchShow(title);
+                                        } catch (Throwable ignored) {
+                                        }
+                                        if (tvShow != null) {
+                                            JSONObject externals =
+                                                    tvShow.optJSONObject("externals");
+                                            if (externals != null) {
+                                                tvdbId = externals.optString("tvdb", null);
+                                            }
+                                        }
+                                    }
+                                    if (tvdbId != null && !tvdbId.isEmpty()) {
+                                        fanart = FanartClient.fetchArt("tv", tvdbId);
+                                    }
+                                } else {
+                                    fanart = FanartClient.fetchArt("movies", String.valueOf(tmdbId));
+                                }
+                                if (fanart != null) {
+                                    fanartBg = FanartClient.pickBackground(fanart);
+                                    fanartLogo = FanartClient.pickLogo(fanart);
+                                }
+                            }
+                        } catch (Throwable ignored) {
+                        }
+
+                        // TVmaze airing line (series only). Reuses the show
+                        // object fetched above for the TVDB id when possible.
+                        String tvmazeLine = null;
+                        if (isTv) {
+                            try {
+                                if (tvShow == null) tvShow = TvmazeHome.searchShow(title);
+                                tvmazeLine = buildTvmazeLine(tvShow);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+
+                        // Fanart backdrop bitmap, downloaded on this thread.
+                        Bitmap bgBmp = null;
+                        if (fanartBg != null && !fanartBg.isEmpty()) {
+                            try {
+                                bgBmp = fetchBackdropBitmap(fanartBg);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+
+                        final JSONObject omdbFinal = omdb;
+                        final String logoFinal = fanartLogo;
+                        final Bitmap bgFinal = bgBmp;
+                        final String tvmazeFinal = tvmazeLine;
+                        a.ui.post(
+                                () -> {
+                                    if (gen != a.generation
+                                            || a.isFinishing()
+                                            || a.root == null
+                                            || !isSameDetailPage(a, title)) {
+                                        return;
+                                    }
+                                    if (omdbFinal != null) {
+                                        TextView db =
+                                                (TextView)
+                                                        a.root.findViewWithTag(
+                                                                "detail-douban-rating");
+                                        TextView rt =
+                                                (TextView)
+                                                        a.root.findViewWithTag("detail-rt-rating");
+                                        TextView imdb =
+                                                (TextView)
+                                                        a.root.findViewWithTag(
+                                                                "detail-imdb-rating");
+                                        TextView mc =
+                                                (TextView)
+                                                        a.root.findViewWithTag("detail-mc-rating");
+                                        if (db != null && rt != null) {
+                                            updateRatingBadges(
+                                                    db,
+                                                    rt,
+                                                    imdb,
+                                                    mc,
+                                                    v,
+                                                    currentDoubanScore(a),
+                                                    omdbFinal);
+                                        }
+                                    }
+                                    if (logoFinal != null && !logoFinal.isEmpty()) {
+                                        View logo =
+                                                a.root.findViewWithTag("detail-fanart-logo");
+                                        if (logo instanceof ImageView) {
+                                            logo.setVisibility(View.VISIBLE);
+                                            a.poster(logoFinal, (ImageView) logo, false);
+                                        }
+                                    }
+                                    // Backdrop only: the bitmap goes straight
+                                    // onto the backdrop canvas; the portrait
+                                    // poster hook is left untouched.
+                                    if (bgFinal != null && !bgFinal.isRecycled()) {
+                                        View backdrop =
+                                                a.root.findViewWithTag("detail-backdrop");
+                                        if (backdrop instanceof PortraitBackdropView) {
+                                            ((PortraitBackdropView) backdrop)
+                                                    .setPosterBitmap(bgFinal, null);
+                                        }
+                                    }
+                                    if (tvmazeFinal != null && !tvmazeFinal.isEmpty()) {
+                                        TextView info =
+                                                (TextView)
+                                                        a.root.findViewWithTag(
+                                                                "detail-tvmaze-info");
+                                        if (info != null) {
+                                            info.setText(tvmazeFinal);
+                                            info.setVisibility(View.VISIBLE);
+                                        }
+                                    }
+                                });
+                    } catch (Throwable ignored) {
+                    }
+                });
+    }
+
+    /** "連載中 · Netflix · 下集：S3E5「標題」 11/20 21:00" — null when nothing usable. */
+    private static String buildTvmazeLine(JSONObject show) {
+        if (show == null) return null;
+        List<String> parts = new ArrayList<>();
+        String status = show.optString("status", null);
+        if (status != null && !status.isEmpty()) parts.add(tvmazeStatusLabel(status));
+        String network = null;
+        JSONObject net = show.optJSONObject("network");
+        if (net != null) network = net.optString("name", null);
+        if (network == null || network.isEmpty()) {
+            JSONObject wc = show.optJSONObject("webChannel");
+            if (wc != null) network = wc.optString("name", null);
+        }
+        if (network != null && !network.isEmpty()) parts.add(network);
+        // Next episode: airstamp (precise UTC) only — never airdate.
+        String nextHref = null;
+        JSONObject links = show.optJSONObject("_links");
+        if (links != null) {
+            JSONObject next = links.optJSONObject("nextepisode");
+            if (next != null) nextHref = next.optString("href", null);
+        }
+        if (nextHref != null && !nextHref.isEmpty()) {
+            try {
+                JSONObject ep = TvmazeHome.fetchEpisode(nextHref);
+                if (ep != null) {
+                    String when = formatAirstampTaipei(ep.optString("airstamp", null));
+                    String epName = ep.optString("name", null);
+                    int season = ep.optInt("season", 0);
+                    int number = ep.optInt("number", 0);
+                    StringBuilder next = new StringBuilder("下集：");
+                    if (season > 0 && number > 0) {
+                        next.append("S").append(season).append("E").append(number).append(" ");
+                    }
+                    if (epName != null && !epName.isEmpty()) {
+                        next.append("「").append(epName).append("」 ");
+                    }
+                    if (when != null) next.append(when);
+                    String text = next.toString().trim();
+                    if (!"下集：".equals(text)) parts.add(text);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        if (parts.isEmpty()) return null;
+        return TextUtils.join(" · ", parts);
+    }
+
+    private static String tvmazeStatusLabel(String status) {
+        if ("Running".equals(status)) return "連載中";
+        if ("Ended".equals(status)) return "已完結";
+        if ("To Be Determined".equals(status)) return "待定";
+        if ("In Development".equals(status)) return "製作中";
+        return status;
+    }
+
+    /**
+     * TVmaze airstamp (UTC, e.g. "2026-11-20T13:00:00+00:00") to Taipei
+     * "M/d HH:mm". The zone designator is stripped and the wall time parsed
+     * as UTC — TVmaze always returns airstamp in UTC.
+     */
+    private static String formatAirstampTaipei(String airstamp) {
+        if (airstamp == null || airstamp.isEmpty()) return null;
+        try {
+            String s = airstamp.trim();
+            int cut = s.length();
+            int z = s.indexOf('Z');
+            if (z > 0) cut = Math.min(cut, z);
+            int plus = s.indexOf('+', 10);
+            if (plus > 0) cut = Math.min(cut, plus);
+            int minus = s.indexOf('-', 10);
+            if (minus > 0) cut = Math.min(cut, minus);
+            String core = s.substring(0, cut);
+            if (core.contains(".")) core = core.substring(0, core.indexOf('.'));
+            SimpleDateFormat in = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US);
+            in.setTimeZone(TimeZone.getTimeZone("UTC"));
+            Date d = in.parse(core);
+            if (d == null) return null;
+            SimpleDateFormat out = new SimpleDateFormat("M/d HH:mm", Locale.getDefault());
+            out.setTimeZone(TimeZone.getTimeZone("Asia/Taipei"));
+            return out.format(d);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** Download one image (max 2MB) and decode it downsampled to <= 1280px wide. */
+    private static Bitmap fetchBackdropBitmap(String url) {
+        HttpURLConnection c = null;
+        InputStream in = null;
+        try {
+            Cms.ImageRequest src = Cms.imageRequest(url);
+            String target = Cms.normalizeHttp(src.url);
+            c = (HttpURLConnection) new URL(target).openConnection();
+            c.setConnectTimeout(4500);
+            c.setReadTimeout(8000);
+            c.setRequestProperty("User-Agent", Cms.USER_AGENT);
+            for (Map.Entry<String, String> h : src.headers.entrySet()) {
+                c.setRequestProperty(h.getKey(), h.getValue());
+            }
+            if (c.getResponseCode() / 100 != 2) return null;
+            in = c.getInputStream();
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            byte[] tmp = new byte[8192];
+            int n;
+            int total = 0;
+            while ((n = in.read(tmp)) != -1) {
+                total += n;
+                if (total > 2 * 1024 * 1024) return null;
+                buf.write(tmp, 0, n);
+            }
+            byte[] bytes = buf.toByteArray();
+            if (bytes.length == 0) return null;
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.length, o);
+            if (o.outWidth <= 0 || o.outHeight <= 0) return null;
+            int sample = 1;
+            while (o.outWidth / sample > 1280) sample *= 2;
+            o.inSampleSize = sample;
+            o.inJustDecodeBounds = false;
+            return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, o);
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            try {
+                if (in != null) in.close();
+            } catch (Exception ignored) {
+            }
+            if (c != null) c.disconnect();
+        }
     }
 
     static void updateMetaLine(
@@ -2857,8 +3487,49 @@ final class MobileDetailScreen {
 
     static void updateRatingBadges(
             TextView doubanBadge, TextView rtBadge, Cms.Video v, double resolvedDouban) {
+        updateRatingBadges(doubanBadge, rtBadge, null, null, v, resolvedDouban, cachedOmdbFor(v));
+    }
+
+    /**
+     * mkoai 2.0.62: rating badges with OMDb data. Rotten Tomatoes prefers the
+     * OMDb value and only falls back to the old remarks/description regex;
+     * IMDb and Metacritic badges show only when OMDb has the value. imdbBadge
+     * / mcBadge may be null (TV DetailScreen has no such views). A non-null
+     * omdb refreshes the page-scoped OMDb cache so later 4-arg calls keep
+     * the OMDb-priority RT value. Every badge hides when it has no value —
+     * never an empty badge.
+     */
+    static void updateRatingBadges(
+            TextView doubanBadge,
+            TextView rtBadge,
+            TextView imdbBadge,
+            TextView mcBadge,
+            Cms.Video v,
+            double resolvedDouban,
+            JSONObject omdb) {
+        if (omdb != null && v != null && v.title != null) {
+            sOmdbTitleKey = Cms.normTitle(v.title);
+            sOmdbData = omdb;
+        }
         double dbScore = resolvedDouban;
         int rtPercent = -1;
+        String imdbValue = null;
+        String mcValue = null;
+        if (omdb != null) {
+            imdbValue = OmdbClient.ratingValue(omdb, "Internet Movie Database");
+            String rtValue = OmdbClient.ratingValue(omdb, "Rotten Tomatoes");
+            if (rtValue != null) {
+                Matcher m = Pattern.compile("(\\d{1,3})\\s*%").matcher(rtValue);
+                if (m.find()) {
+                    try {
+                        int parsed = Integer.parseInt(m.group(1));
+                        if (parsed >= 1 && parsed <= 100) rtPercent = parsed;
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+            mcValue = OmdbClient.ratingValue(omdb, "Metacritic");
+        }
         if (v != null) {
             String blob =
                     (v.remarks == null ? "" : v.remarks)
@@ -2875,28 +3546,53 @@ final class MobileDetailScreen {
                     }
                 }
             }
-            Matcher rtm = Pattern.compile("(?:烂番茄|新鲜度)\\s*[:：]?\\s*(\\d{2,3})\\s*%").matcher(blob);
-            if (rtm.find()) {
-                try {
-                    int parsed = Integer.parseInt(rtm.group(1));
-                    if (parsed >= 1 && parsed <= 100) rtPercent = parsed;
-                } catch (Exception ignored) {
+            if (rtPercent <= 0) {
+                Matcher rtm =
+                        Pattern.compile("(?:烂番茄|新鲜度)\\s*[:：]?\\s*(\\d{2,3})\\s*%").matcher(blob);
+                if (rtm.find()) {
+                    try {
+                        int parsed = Integer.parseInt(rtm.group(1));
+                        if (parsed >= 1 && parsed <= 100) rtPercent = parsed;
+                    } catch (Exception ignored) {
+                    }
                 }
             }
         }
-        if (dbScore >= 2.0 && dbScore <= 10.0) {
-            doubanBadge.setText(String.format(Locale.US, "豆瓣 ★ %.1f", dbScore));
-            doubanBadge.setVisibility(View.VISIBLE);
-        } else {
-            doubanBadge.setText("");
-            doubanBadge.setVisibility(View.GONE);
+        if (doubanBadge != null) {
+            if (dbScore >= 2.0 && dbScore <= 10.0) {
+                doubanBadge.setText(String.format(Locale.US, "豆瓣 ★ %.1f", dbScore));
+                doubanBadge.setVisibility(View.VISIBLE);
+            } else {
+                doubanBadge.setText("");
+                doubanBadge.setVisibility(View.GONE);
+            }
         }
-        if (rtPercent > 0) {
-            rtBadge.setText("爛番茄 " + rtPercent + "%");
-            rtBadge.setVisibility(View.VISIBLE);
-        } else {
-            rtBadge.setText("");
-            rtBadge.setVisibility(View.GONE);
+        if (rtBadge != null) {
+            if (rtPercent > 0) {
+                rtBadge.setText("爛番茄 " + rtPercent + "%");
+                rtBadge.setVisibility(View.VISIBLE);
+            } else {
+                rtBadge.setText("");
+                rtBadge.setVisibility(View.GONE);
+            }
+        }
+        if (imdbBadge != null) {
+            if (imdbValue != null && !imdbValue.isEmpty()) {
+                imdbBadge.setText("IMDb " + imdbValue);
+                imdbBadge.setVisibility(View.VISIBLE);
+            } else {
+                imdbBadge.setText("");
+                imdbBadge.setVisibility(View.GONE);
+            }
+        }
+        if (mcBadge != null) {
+            if (mcValue != null && !mcValue.isEmpty()) {
+                mcBadge.setText("Metacritic " + mcValue);
+                mcBadge.setVisibility(View.VISIBLE);
+            } else {
+                mcBadge.setText("");
+                mcBadge.setVisibility(View.GONE);
+            }
         }
     }
 

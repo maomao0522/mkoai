@@ -8,13 +8,23 @@ import org.json.JSONObject;
 /**
  * mkoai Simkl trending titles (primary home content, user choice 2026-11-12).
  * Simkl is a global (non-mainland) service, so it loads from Taiwan where
- * Douban fails. No API key needed for the trending endpoints.
+ * Douban fails.
  *
- * <p>TV: https://api.simkl.com/tv/trending?extended=posters
- * Movies: https://api.simkl.com/movies/trending?extended=posters
- * Each returns a JSON array (50 items) with title, poster (partial path),
- * and ratings {simkl:{rating}, imdb:{rating}}. Poster full URL is
- * https://simkl.in/posters/&lt;path&gt;_m.jpg (verified HTTP 200).
+ * <p>Trending goes through the Cloudflare Worker, never direct:
+ * GET /api/simkl?type=movies|tv&list=trending (the Worker holds the
+ * SIMKL_CLIENT_ID secret and proxies api.simkl.com). A direct call to
+ * api.simkl.com without client_id returns HTTP 412 client_id_failed
+ * (live-verified 2026-11-15, movies + tv both 412) — do NOT call Simkl
+ * directly from the app.
+ *
+ * <p>Trending entries carry NO title — verified live 2026-11-15 with the
+ * real V1 Client ID, even with extended=full (each item has only poster /
+ * fanart / ids{simkl_id} / release_date / rank / ratings / country /
+ * runtime / status). So every title comes from the fallback:
+ * GET /api/simkl?id=&lt;simkl_id&gt;&type=movies|tv, and an item whose
+ * title cannot be resolved is skipped (never a blank card).
+ * Poster full URL is https://simkl.in/posters/&lt;path&gt;_m.jpg
+ * (verified HTTP 200). Ratings: {simkl:{rating}, imdb:{rating}}.
  *
  * <p>Each card's id is "msearch:&lt;title&gt;", so tapping it runs the normal
  * cross-source search for that title (and auto-plays the best match).
@@ -22,10 +32,8 @@ import org.json.JSONObject;
  * (see SearchVariants), so both scripts find the title.
  */
 final class SimklHome {
-    private static final String TV_URL =
-            "https://api.simkl.com/tv/trending?extended=posters";
-    private static final String MOVIES_URL =
-            "https://api.simkl.com/movies/trending?extended=posters";
+    private static final String TV_URL = "/api/simkl?type=tv&list=trending";
+    private static final String MOVIES_URL = "/api/simkl?type=movies&list=trending";
     private static final String POSTER_BASE = "https://simkl.in/posters/";
     private static final int PER_SECTION = 10;
 
@@ -44,35 +52,47 @@ final class SimklHome {
         return out;
     }
 
-    private static List<Cms.Video> fetchSection(String url, String kind) throws Exception {
-        String raw = Cms.fetch(url, null);
-        JSONArray data = new JSONArray(raw);
-        List<String> titles = new ArrayList<>();
-        List<String> posters = new ArrayList<>();
-        List<String> remarks = new ArrayList<>();
-        for (int i = 0; i < data.length() && titles.size() < PER_SECTION; i++) {
-            JSONObject o = data.optJSONObject(i);
-            if (o == null) continue;
-            String title = o.optString("title", "").trim();
-            if (title.isEmpty()) continue;
-            titles.add(title);
-            String poster = o.optString("poster", "").trim();
-            posters.add(poster.isEmpty() ? "" : POSTER_BASE + poster + "_m.jpg");
-            String rate = rating(o);
-            remarks.add(rate.isEmpty() ? kind + "熱門" : kind + " " + rate + " 分");
-        }
-        // mkoai: translate foreign titles to correct Traditional Chinese
-        // via Douban (TitleTranslator) — never the broken char converter.
-        // The translated Chinese title is also what msearch uses, since the
-        // user's source carries Chinese titles.
-        List<String> displayTitles = TitleTranslator.toTraditionalAll(titles);
+    /** mkoai 2.0.62: Simkl trending movies as home items. Throws on failure. */
+    public static List<TmdbClient.Item> fetchMoviesItems() throws Exception {
+        return fetchSectionItems(MOVIES_URL, "電影", true);
+    }
+
+    /** mkoai 2.0.62: Simkl trending TV as home items. Throws on failure. */
+    public static List<TmdbClient.Item> fetchTvItems() throws Exception {
+        return fetchSectionItems(TV_URL, "影劇", false);
+    }
+
+    /**
+     * mkoai 2.0.62: Simkl trending movies as home videos — the exact
+     * fetchSection output (id="msearch:"+翻譯標題、tag="simkl-電影").
+     * Throws on failure; the caller hides the section.
+     */
+    public static List<Cms.Video> fetchMoviesVideos() throws Exception {
+        return fetchSection(MOVIES_URL, "電影");
+    }
+
+    /**
+     * mkoai 2.0.62: Simkl trending TV as home videos — the exact
+     * fetchSection output (id="msearch:"+翻譯標題、tag="simkl-影劇").
+     * Throws on failure; the caller hides the section.
+     */
+    public static List<Cms.Video> fetchTvVideos() throws Exception {
+        return fetchSection(TV_URL, "影劇");
+    }
+
+    private static List<Cms.Video> fetchSection(String path, String kind) throws Exception {
+        // 2.0.62: 與 fetchSectionItems 共用解析，再轉回舊形狀。
+        // id / title / poster / remarks / tag 必須與 2.0.61 一字不改：
+        // id="msearch:"+翻譯標題、remarks="影劇 x.x 分"／"影劇熱門"、
+        // tag="simkl-影劇"／"simkl-電影"。
+        List<TmdbClient.Item> items = fetchSectionItems(path, kind, kind.equals("電影"));
         List<Cms.Video> out = new ArrayList<>();
-        for (int i = 0; i < titles.size(); i++) {
+        for (TmdbClient.Item it : items) {
             Cms.Video v = new Cms.Video();
-            v.id = "msearch:" + displayTitles.get(i);
-            v.title = displayTitles.get(i);
-            v.poster = posters.get(i);
-            v.remarks = remarks.get(i);
+            v.id = "msearch:" + it.title;
+            v.title = it.title;
+            v.poster = it.poster;
+            v.remarks = it.vote > 0 ? kind + " " + trimRating(it.vote) + " 分" : kind + "熱門";
             // mkoai: tag carries the kind so the home renders two
             // sections (Simkl 影劇 / Simkl 電影) instead of one.
             v.tag = "simkl-" + kind;
@@ -81,21 +101,132 @@ final class SimklHome {
         return out;
     }
 
+    /**
+     * Shared trending parser: up to PER_SECTION items with a title,
+     * translated in one batch (see TitleTranslator). Item carries the
+     * translated title, full poster URL, numeric rating, and the year
+     * from release_date; date stays "" (fail-open).
+     *
+     * <p>The chart is fetched from the Worker, whose envelope is
+     * {@code {source, type, list, data:[...]}} (see {@link #trendingData}).
+     * The Worker route is not deployed yet (SIMKL_CLIENT_ID Secret
+     * pending), so until then getJson throws and the caller hides the
+     * row — expected fail-soft, never a crash.
+     */
+    private static List<TmdbClient.Item> fetchSectionItems(String path, String kind, boolean isMovie)
+            throws Exception {
+        JSONArray data = trendingData(WorkerApi.getJson(path));
+        List<TmdbClient.Item> items = new ArrayList<>();
+        List<String> titles = new ArrayList<>();
+        for (int i = 0; i < data.length() && items.size() < PER_SECTION; i++) {
+            JSONObject o = data.optJSONObject(i);
+            if (o == null) continue;
+            TmdbClient.Item it = parseItem(o, isMovie);
+            if (it.title.isEmpty()) {
+                // trending 無片名是常態（即使 extended=full 也沒有）：
+                // /api/simkl?id= 查一次標題；查到就用，查不到就跳過
+                // 該項（不產生空白卡）。該 Worker 路由尚未部署（待
+                // SIMKL_CLIENT_ID Secret），目前查一定失敗、走跳過分支
+                // ——預期內的 fail-soft，不要報錯。
+                String title = lookupSimklTitle(o, isMovie);
+                if (title == null || title.isEmpty()) continue;
+                it.title = title;
+            }
+            items.add(it);
+            titles.add(it.title);
+        }
+        // mkoai: translate foreign titles to correct Traditional Chinese
+        // via Douban (TitleTranslator) — never the broken char converter.
+        // The translated Chinese title is also what msearch uses, since the
+        // user's source carries Chinese titles.
+        List<String> displayTitles = TitleTranslator.toTraditionalAll(titles);
+        for (int i = 0; i < items.size(); i++) items.get(i).title = displayTitles.get(i);
+        return items;
+    }
+
+    /**
+     * Pure: the trending array inside a Worker /api/simkl envelope
+     * {@code {source, type, list, data:[...]}}. Empty when the envelope
+     * has no data array — a 200 with no data hides the row, never crashes.
+     */
+    static JSONArray trendingData(JSONObject res) {
+        if (res == null) return new JSONArray();
+        JSONArray data = res.optJSONArray("data");
+        return data != null ? data : new JSONArray();
+    }
+
+    /**
+     * Pure: one Worker /api/simkl trending entry -> home Item. The title
+     * is "" when the entry has none — trending never carries one (even
+     * with extended=full), so the caller fills it via /api/simkl?id=
+     * or skips the item. Poster expands to the full simkl.in URL;
+     * rating prefers Simkl over IMDb; year comes from release_date.
+     */
+    static TmdbClient.Item parseItem(JSONObject o, boolean isMovie) {
+        if (o == null) o = new JSONObject();
+        TmdbClient.Item it = new TmdbClient.Item();
+        it.type = isMovie ? "movie" : "tv";
+        it.title = o.optString("title", "").trim();
+        String poster = o.optString("poster", "").trim();
+        it.poster = poster.isEmpty() ? "" : POSTER_BASE + poster + "_m.jpg";
+        it.vote = ratingValue(o);
+        it.year = yearOf(o.optString("release_date", "").trim());
+        it.date = "";
+        it.overview = "";
+        it.backdrop = "";
+        return it;
+    }
+
+    /** 缺片名時用 simkl_id 向 Worker 查標題；查不到回 null（呼叫端跳過該項）。 */
+    private static String lookupSimklTitle(JSONObject o, boolean isMovie) {
+        int simklId = 0;
+        JSONObject ids = o.optJSONObject("ids");
+        if (ids != null) simklId = ids.optInt("simkl_id", 0);
+        if (simklId <= 0) simklId = o.optInt("id", 0);
+        if (simklId <= 0) return null;
+        try {
+            JSONObject res = WorkerApi.getJson(
+                    "/api/simkl?id=" + simklId + "&type=" + (isMovie ? "movies" : "tv"));
+            JSONObject d = res.optJSONObject("data");
+            if (d == null) return null;
+            String title = d.optString("title", "").trim();
+            return title.isEmpty() ? null : title;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     /** Prefer the Simkl rating, fall back to IMDb. Returns "" when neither exists. */
     private static String rating(JSONObject o) {
+        double r = ratingValue(o);
+        return r > 0 ? trimRating(r) : "";
+    }
+
+    /** Prefer the Simkl rating, fall back to IMDb. Returns 0 when neither exists. */
+    private static double ratingValue(JSONObject o) {
         JSONObject ratings = o.optJSONObject("ratings");
-        if (ratings == null) return "";
+        if (ratings == null) return 0;
         JSONObject simkl = ratings.optJSONObject("simkl");
         if (simkl != null) {
             double r = simkl.optDouble("rating", 0);
-            if (r > 0) return trimRating(r);
+            if (r > 0) return r;
         }
         JSONObject imdb = ratings.optJSONObject("imdb");
         if (imdb != null) {
             double r = imdb.optDouble("rating", 0);
-            if (r > 0) return trimRating(r);
+            if (r > 0) return r;
         }
-        return "";
+        return 0;
+    }
+
+    /** First 4 digits of a yyyy-MM-dd date, or "" when absent. */
+    private static String yearOf(String date) {
+        if (date == null || date.length() < 4) return "";
+        String y = date.substring(0, 4);
+        for (int i = 0; i < 4; i++) {
+            if (y.charAt(i) < '0' || y.charAt(i) > '9') return "";
+        }
+        return y;
     }
 
     private static String trimRating(double r) {

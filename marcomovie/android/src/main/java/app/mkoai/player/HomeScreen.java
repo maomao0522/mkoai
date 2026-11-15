@@ -177,6 +177,19 @@ final class HomeScreen {
     final Map<View, String> tabIds = new HashMap<>();
     final List<View> historyCards = new ArrayList<>(), tabs = new ArrayList<>();
     final List<List<View>> rows = new ArrayList<>();
+    /**
+     * mkoai 2.0.62: external-ranking sections (Trakt / Simkl) — an
+     * independent container above the content grid, with its own focus
+     * rows. Deliberately NOT part of {@link #rows} / Snapshot.videos /
+     * composeHomeVideos: clearGrid()/drawGrid() rebuild the grid and
+     * clear {@code rows}, so section cards kept there would lose their
+     * focus wiring on every grid repaint. Sections are only ever added
+     * (never rebuilt by the grid); a failed/empty group builds nothing.
+     */
+    LinearLayout sectionsContainer;
+    final List<List<View>> sectionRows = new ArrayList<>();
+    boolean sectionsLoading;
+    int sectionsToken;
     LinearLayout content;
     android.widget.HorizontalScrollView categoryScroll;
     CategoryFlow filters;
@@ -323,6 +336,16 @@ final class HomeScreen {
                         () -> showWindow(Math.max(0, state.windowStart - windowSize())));
         earlier.setVisibility(View.GONE);
         a.body.addView(earlier, new LinearLayout.LayoutParams(a.dp(180), a.dp(40)));
+        // mkoai 2.0.62: external-ranking sections live here — after the
+        // tabs/status, before the content grid, in their own container
+        // (never inside Snapshot.videos / composeHomeVideos).
+        sectionsContainer = a.vertical();
+        sectionsContainer.setClipChildren(false);
+        sectionsContainer.setClipToPadding(false);
+        a.body.addView(sectionsContainer, new LinearLayout.LayoutParams(-1, -2));
+        sectionRows.clear();
+        sectionsLoading = false;
+        sectionsToken++;
         content = a.vertical();
         content.setClipChildren(false);
         content.setClipToPadding(false);
@@ -363,6 +386,9 @@ final class HomeScreen {
                 && (state.snapshot != null || System.currentTimeMillis() - saved.time < 300000)) {
             snapshot = saved;
             renderSnapshot();
+            // mkoai 2.0.62: the cached snapshot skips loadHome(), so the
+            // ranking sections are started here too (same loader).
+            startExternalSections();
             return;
         }
         if (!a.reduced && (site.api == null || !site.api.contains("fixture.test"))) {
@@ -374,10 +400,168 @@ final class HomeScreen {
                 if (System.currentTimeMillis() - disk.time >= 300000) {
                     refreshHomeSilently();
                 }
+                startExternalSections();
                 return;
             }
         }
         loadHome();
+    }
+
+    /**
+     * mkoai 2.0.62: start the external-ranking sections (Trakt movies /
+     * shows, Simkl movies / shows). One call per home build — the guard
+     * stops a second start while one is in flight (loadHome and the
+     * cached-snapshot path in show() both call this). The fetch runs on
+     * its own pool via submitPage, never on the caller's thread, so it
+     * can never slow the grid or block a tap.
+     */
+    void startExternalSections() {
+        if (sectionsLoading || sectionsContainer == null) return;
+        sectionsLoading = true;
+        final int token = ++sectionsToken;
+        a.submitPage(() -> fetchExternalSections(token));
+    }
+
+    /** One ranking group's fetch result, tagged with its display order. */
+    private static final class SectionFetch {
+        final int index;
+        final java.util.List<Cms.Video> videos;
+
+        SectionFetch(int index, java.util.List<Cms.Video> videos) {
+            this.index = index;
+            this.videos = videos;
+        }
+    }
+
+    /**
+     * mkoai 2.0.62: fetch the 4 ranking groups in parallel under ONE
+     * shared 20s budget (same budget as the all-sources aggregate).
+     * Each group paints the moment it returns (progressive display);
+     * a group that throws, returns null/empty, or misses the budget is
+     * skipped silently — no section, no blank space, no toast, and the
+     * other groups still show. Runs on a background thread; only the
+     * a.ui.post paint touches the UI thread.
+     */
+    void fetchExternalSections(int token) {
+        final String[] titles = {"Trakt 热门电影", "Trakt 热门剧集", "Simkl 热门电影", "Simkl 热门剧集"};
+        java.util.List<java.util.concurrent.Callable<SectionFetch>> jobs = new ArrayList<>();
+        jobs.add(
+                () -> {
+                    try {
+                        return new SectionFetch(0, TraktHome.fetchMoviesVideos());
+                    } catch (Throwable ignored) {
+                        return new SectionFetch(0, null);
+                    }
+                });
+        jobs.add(
+                () -> {
+                    try {
+                        return new SectionFetch(1, TraktHome.fetchShowsVideos());
+                    } catch (Throwable ignored) {
+                        return new SectionFetch(1, null);
+                    }
+                });
+        jobs.add(
+                () -> {
+                    try {
+                        return new SectionFetch(2, SimklHome.fetchMoviesVideos());
+                    } catch (Throwable ignored) {
+                        return new SectionFetch(2, null);
+                    }
+                });
+        jobs.add(
+                () -> {
+                    try {
+                        return new SectionFetch(3, SimklHome.fetchTvVideos());
+                    } catch (Throwable ignored) {
+                        return new SectionFetch(3, null);
+                    }
+                });
+        java.util.concurrent.ExecutorService pool =
+                java.util.concurrent.Executors.newFixedThreadPool(
+                        jobs.size(),
+                        runnable -> {
+                            Thread thread = new Thread(runnable, "mkoai-home-sections");
+                            thread.setDaemon(true);
+                            thread.setPriority(Thread.MIN_PRIORITY);
+                            return thread;
+                        });
+        java.util.concurrent.ExecutorCompletionService<SectionFetch> ecs =
+                new java.util.concurrent.ExecutorCompletionService<>(pool);
+        for (java.util.concurrent.Callable<SectionFetch> job : jobs) ecs.submit(job);
+        long deadline = System.currentTimeMillis() + ALL_SOURCES_BUDGET_MS;
+        int received = 0;
+        try {
+            while (received < jobs.size()) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) break;
+                java.util.concurrent.Future<SectionFetch> f =
+                        ecs.poll(remaining, java.util.concurrent.TimeUnit.MILLISECONDS);
+                if (f == null) break;
+                received++;
+                SectionFetch one = null;
+                try {
+                    one = f.get();
+                } catch (Exception ignored) {
+                }
+                if (one == null || one.videos == null || one.videos.isEmpty()) continue;
+                final SectionFetch done = one;
+                a.ui.post(() -> addExternalSection(token, titles[done.index], done.videos));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /**
+     * mkoai 2.0.62: build one ranking section (title + horizontal cards)
+     * into the sections container. UI thread only. A group that is
+     * empty after the 2.0.61 recommendation filter builds nothing, so a
+     * failed group leaves no trace. Cards reuse {@link #card} (same
+     * poster size, same 電影/劇 badge, same tap → a.openListing), only
+     * the tag is re-tagged so a section card can never collide with a
+     * grid card's "home-video:&lt;n&gt;" tag.
+     */
+    void addExternalSection(int token, String title, java.util.List<Cms.Video> videos) {
+        if (!active() || token != sectionsToken || sectionsContainer == null) return;
+        if (videos == null) return;
+        java.util.List<Cms.Video> shown = VideoKind2061.filterRecommendations(videos);
+        if (shown.isEmpty()) return;
+        if (shown.size() > ALL_SOURCES_PER_SITE_CAP)
+            shown = new ArrayList<>(shown.subList(0, ALL_SOURCES_PER_SITE_CAP));
+        LinearLayout section = a.vertical();
+        section.setClipChildren(false);
+        section.setClipToPadding(false);
+        TextView head = a.text(title, 16, MainActivity.WHITE);
+        head.setTypeface(null, Typeface.BOLD);
+        head.setPadding(0, a.dp(14), 0, a.dp(8));
+        section.addView(head);
+        android.widget.HorizontalScrollView scroll = new android.widget.HorizontalScrollView(a);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setClipToPadding(false);
+        scroll.setFocusable(false);
+        LinearLayout cardsRow = a.row();
+        cardsRow.setGravity(Gravity.TOP);
+        cardsRow.setClipChildren(false);
+        cardsRow.setClipToPadding(false);
+        scroll.addView(cardsRow);
+        List<View> focusRow = new ArrayList<>();
+        int sectionIndex = sectionRows.size();
+        for (int i = 0; i < shown.size(); i++) {
+            View cardView = card(shown.get(i), i);
+            cardView.setTag("home-section:" + sectionIndex + ":" + i);
+            LinearLayout.LayoutParams lp =
+                    new LinearLayout.LayoutParams(a.dp(posterWidth), -2);
+            lp.rightMargin = a.dp(10);
+            cardsRow.addView(cardView, lp);
+            focusRow.add(cardView);
+        }
+        section.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
+        sectionsContainer.addView(section);
+        sectionRows.add(focusRow);
+        wireNavigation();
     }
 
     static Cms.Listing parseHomeListing(String raw) {
@@ -748,6 +932,13 @@ final class HomeScreen {
                         if (n != null && !n.isEmpty()) doubanNew = n;
                     } catch (Throwable ignored) {
                     }
+                    // mkoai 2.0.62: external-ranking sections — started
+                    // here so BOTH paths below (all-sources and single
+                    // source) share them. Runs on its own threads with
+                    // its own 20s budget and paints progressively; it
+                    // never blocks this thread (the grid must not wait
+                    // for a slow ranking provider).
+                    startExternalSections();
                     // mkoai 2.0.60: all-sources home — aggregate every
                     // configured source in parallel, painting progress as
                     // sources return. The single-source path below is
@@ -2193,12 +2384,19 @@ final class HomeScreen {
                                 : source.getId()
                         : historyCards.get(stackedHistory ? historyCards.size() - 1 : 0).getId());
         source.setNextFocusDownId(selectedTab().getId());
+        // mkoai 2.0.62: the first content row is a ranking section when
+        // any is built, else the first grid row — tabs / filters step
+        // down into the sections first, then the grid.
+        List<View> firstContentRow =
+                !sectionRows.isEmpty()
+                        ? sectionRows.get(0)
+                        : (!rows.isEmpty() ? rows.get(0) : null);
         int contentDownId =
                 earlier.isShown()
                         ? earlier.getId()
-                        : rows.isEmpty()
+                        : firstContentRow == null || firstContentRow.isEmpty()
                                 ? (more.isShown() ? more.getId() : -1)
-                                : rows.get(0).get(0).getId();
+                                : firstContentRow.get(0).getId();
         boolean inlineExpanded = inlineFilters != null && inlineFilters.expanded();
         boolean inlineSummary = inlineFilters != null && inlineFilters.summaryShown();
         View firstFilterChip = inlineExpanded ? inlineFilters.entryChip(0) : null;
@@ -2260,8 +2458,10 @@ final class HomeScreen {
                                     ? inlineFilters
                                             .nearest(inlineFilters.rows.get(r + 1), option)
                                             .getId()
-                                    : !rows.isEmpty() && !earlier.isShown()
-                                            ? inlineFilters.nearest(rows.get(0), option).getId()
+                                    : firstContentRow != null
+                                                    && !firstContentRow.isEmpty()
+                                                    && !earlier.isShown()
+                                            ? inlineFilters.nearest(firstContentRow, option).getId()
                                             : contentDownId == -1 ? option.getId() : contentDownId);
                 }
                 if (a.homeDock != null && !line.isEmpty())
@@ -2281,6 +2481,46 @@ final class HomeScreen {
             if (a.homeDock != null) a.homeDock.rightEdge(inlineFilters.resetButton);
         }
         int lastInlineRow = inlineExpanded ? inlineFilters.rows.size() - 1 : -1;
+        // mkoai 2.0.62: ranking sections sit between the tabs/filters
+        // and the grid — wire them into the same up/down chain. Section
+        // cards and grid cards share the poster width, so the column
+        // index maps straight across (clamped at the shorter row). Up
+        // from the first section reaches the filters/tabs; down from the
+        // last section reaches the first grid row (or 「載入更多」 when
+        // the grid is still empty). Never touches the grid's own wiring.
+        for (int s = 0; s < sectionRows.size(); s++) {
+            List<View> line = sectionRows.get(s);
+            horizontal(line);
+            for (int c = 0; c < line.size(); c++) {
+                View sectionCard = line.get(c);
+                View upTarget;
+                if (s == 0) {
+                    if (earlier.isShown()) upTarget = earlier;
+                    else if (inlineExpanded)
+                        upTarget =
+                                inlineFilters.nearest(
+                                        inlineFilters.rows.get(lastInlineRow), sectionCard);
+                    else if (inlineSummary) upTarget = inlineFilters.expandButton;
+                    else upTarget = selectedTab();
+                } else {
+                    List<View> prev = sectionRows.get(s - 1);
+                    upTarget = prev.get(Math.min(c, prev.size() - 1));
+                }
+                sectionCard.setNextFocusUpId(upTarget.getId());
+                View downTarget;
+                if (s + 1 < sectionRows.size()) {
+                    List<View> next = sectionRows.get(s + 1);
+                    downTarget = next.get(Math.min(c, next.size() - 1));
+                } else if (!rows.isEmpty()) {
+                    downTarget = rows.get(0).get(Math.min(c, rows.get(0).size() - 1));
+                } else if (more.isShown()) {
+                    downTarget = more;
+                } else {
+                    downTarget = sectionCard;
+                }
+                sectionCard.setNextFocusDownId(downTarget.getId());
+            }
+        }
         for (int r = Math.max(0, firstRow); r < rows.size(); r++) {
             List<View> row = rows.get(r);
             horizontal(row);
@@ -2290,16 +2530,32 @@ final class HomeScreen {
                         r == 0
                                 ? (earlier.isShown()
                                         ? earlier.getId()
-                                        : inlineExpanded
-                                                ? inlineFilters
-                                                        .nearest(
-                                                                inlineFilters.rows.get(
-                                                                        lastInlineRow),
-                                                                card)
+                                        : !sectionRows.isEmpty()
+                                                // 2.0.62: sections sit
+                                                // directly above the grid.
+                                                ? sectionRows
+                                                        .get(sectionRows.size() - 1)
+                                                        .get(
+                                                                Math.min(
+                                                                        c,
+                                                                        sectionRows
+                                                                                .get(
+                                                                                        sectionRows
+                                                                                                        .size()
+                                                                                                - 1)
+                                                                                .size()
+                                                                                - 1))
                                                         .getId()
-                                                : inlineSummary
-                                                        ? inlineFilters.expandButton.getId()
-                                                        : selectedTab().getId())
+                                                : inlineExpanded
+                                                        ? inlineFilters
+                                                                .nearest(
+                                                                        inlineFilters.rows.get(
+                                                                                lastInlineRow),
+                                                                        card)
+                                                                .getId()
+                                                        : inlineSummary
+                                                                ? inlineFilters.expandButton.getId()
+                                                                : selectedTab().getId())
                                 : rows.get(r - 1)
                                         .get(Math.min(c, rows.get(r - 1).size() - 1))
                                         .getId());
@@ -2318,15 +2574,31 @@ final class HomeScreen {
                                 ? inlineFilters.expandButton.getId()
                                 : selectedTab().getId();
         earlier.setNextFocusUpId(aboveGridId);
-        earlier.setNextFocusDownId(rows.isEmpty() ? more.getId() : rows.get(0).get(0).getId());
-        more.setNextFocusUpId(
-                rows.isEmpty() ? aboveGridId : rows.get(rows.size() - 1).get(0).getId());
+        // mkoai 2.0.62: down from 「檢視前面的影片」 lands on the first
+        // section when any is built, else the first grid row.
+        earlier.setNextFocusDownId(
+                firstContentRow == null || firstContentRow.isEmpty()
+                        ? more.getId()
+                        : firstContentRow.get(0).getId());
+        // mkoai 2.0.62: up from 「載入更多」 is the last grid row, or the
+        // last section when the grid is still empty.
+        View lastContentCard =
+                !rows.isEmpty()
+                        ? rows.get(rows.size() - 1).get(0)
+                        : !sectionRows.isEmpty()
+                                ? sectionRows.get(sectionRows.size() - 1).get(0)
+                                : null;
+        more.setNextFocusUpId(lastContentCard == null ? aboveGridId : lastContentCard.getId());
         if (a.homeDock != null) {
             a.homeDock.rightEdge(source);
             a.homeDock.rightEdge(allHistory);
             a.homeDock.rightEdge(more);
             a.homeDock.rightEdge(earlier);
             if (!tabs.isEmpty()) a.homeDock.rightEdge(tabs.get(tabs.size() - 1));
+            // mkoai 2.0.62: the dock's right edge also covers section rows.
+            for (List<View> line : sectionRows) {
+                if (!line.isEmpty()) a.homeDock.rightEdge(line.get(line.size() - 1));
+            }
             for (int r = Math.max(0, firstRow); r < rows.size(); r++) {
                 List<View> row = rows.get(r);
                 if (!row.isEmpty()) a.homeDock.rightEdge(row.get(row.size() - 1));

@@ -43,6 +43,8 @@ final class Prefs {
     // picker. OFF: play entries show the 「選擇片源」 list first.
     static final String AUTO_DIRECT_PLAY = "auto_direct_play";
     static final String FILTER_HLS_ADS = "filter_hls_ads";
+    /** mkoai 2.0.62: analytics opt-out — when false, PostHogClient.capture is a no-op. */
+    static final String ANALYTICS_ENABLED = "analytics_enabled";
     static final String REPEAT_MODE = "repeat_mode";
     static final String SKIP_INTRO = "skip_intro";
     static final String SKIP_OUTRO = "skip_outro";
@@ -103,6 +105,8 @@ final class Prefs {
     static final String WATCH_HISTORY = "watch_history";
     /** mkoai 2.0.60: manual ad marks (title+episode+source -> [startMs, endMs]), JSON. Local only — deliberately NOT in SYNC_SETTING_KEYS, so it is never uploaded to Supabase. */
     static final String AD_MARKS = "ad_marks";
+    /** mkoai 2.0.62: PostHog anonymous distinct_id (random UUID). Local only — an identifier, not a user setting, so deliberately NOT in KEYS. */
+    static final String POSTHOG_DISTINCT_ID = "posthog_distinct_id";
     static final String GLOBAL_SEARCH_HISTORY = "global_search_history";
     static final String PHONETIC_TITLES = "phonetic_titles";
 
@@ -139,6 +143,7 @@ final class Prefs {
         PLAY_SPEED,
         AUTO_NEXT,
         FILTER_HLS_ADS,
+        ANALYTICS_ENABLED,
         REPEAT_MODE,
         SKIP_INTRO,
         SKIP_OUTRO,
@@ -168,6 +173,7 @@ final class Prefs {
                                     REDUCED_TRANSPARENCY,
                                     AUTO_NEXT,
                                     FILTER_HLS_ADS,
+                                    ANALYTICS_ENABLED,
                                     DANMAKU_DEFAULT,
                                     SOFTWARE_AUDIO,
                                     PREFER_AAC,

@@ -58,6 +58,8 @@ public final class MainActivity extends Activity {
     Dialog sourceDialog, accountDialog;
     MagnetStream magnetStream;
     static volatile PhoneticSearchIndex sharedPhonetic;
+    /** mkoai 2.0.62: app_open is sent once per process, not on every onCreate. */
+    private static boolean sAppOpenCaptured;
     volatile PhoneticSearchIndex phonetic;
     final CountDownLatch phoneticReady = new CountDownLatch(1);
     ConfigStore configStore;
@@ -639,6 +641,14 @@ public final class MainActivity extends Activity {
         privateMode = PrivacySpace.active;
         if (privateMode) getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
         activeActivity = this;
+        // mkoai 2.0.62: analytics — init first (persists the distinct_id in
+        // SharedPreferences file "movie"), then app_open once per process.
+        // capture() is async + silent-failure and never blocks startup.
+        PostHogClient.init(this);
+        if (!sAppOpenCaptured) {
+            sAppOpenCaptured = true;
+            PostHogClient.capture("app_open", new org.json.JSONObject());
+        }
         installPluginCrashGuard();
         android.util.DisplayMetrics rawScreen = new android.util.DisplayMetrics();
         getWindowManager().getDefaultDisplay().getMetrics(rawScreen);

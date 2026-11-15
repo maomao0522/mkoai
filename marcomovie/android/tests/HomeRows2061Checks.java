@@ -136,11 +136,11 @@ public class HomeRows2061Checks {
         eq(HomeRows2061.yearLine(noYear, 2026), "",
                 "(b) no year -> no year line (hidden)");
         eq(HomeRows2061.yearLine(null, 2026), "", "(b) null video -> no year line");
-        eq(HomeRows2061.TMDB_ROW_DEFS.length, 25,
-                "(b) the phone home keeps all 25 reference rows");
+        eq(HomeRows2061.TMDB_ROW_DEFS.length, 30,
+                "(b) the phone home keeps all 25 reference rows + 5 new 2.0.62 rows (got 30)");
         Set<String> labels = new HashSet<>();
         for (String[] def : HomeRows2061.TMDB_ROW_DEFS) labels.add(def[0]);
-        eq(labels.size(), 25, "(b) no duplicate row labels");
+        eq(labels.size(), 30, "(b) no duplicate row labels");
         check(HomeRows2061.isDoubanRow(HomeRows2061.KIND_DOUBAN_TOP),
                 "(b) 豆瓣高分 is a Douban-backed row");
         check(!HomeRows2061.isDoubanRow("trending_movie"),
@@ -171,11 +171,11 @@ public class HomeRows2061Checks {
                 "(e) RESULT_CANCELED does not count as a successful install");
         check(!UpdateScreen.installSucceeded(android.app.Activity.RESULT_FIRST_USER),
                 "(e) any other result does not count as a successful install");
-        check(UpdateManager.shouldDeleteAfterUpgrade(20062, 20061),
+        check(UpdateManager.shouldDeleteAfterUpgrade(20063, 20062),
                 "(e) a higher installed version deletes the old APK");
-        check(!UpdateManager.shouldDeleteAfterUpgrade(20061, 20061),
+        check(!UpdateManager.shouldDeleteAfterUpgrade(20062, 20062),
                 "(e) the same version does not delete the APK");
-        check(!UpdateManager.shouldDeleteAfterUpgrade(20060, 20061),
+        check(!UpdateManager.shouldDeleteAfterUpgrade(20061, 20062),
                 "(e) a lower installed version does not delete the APK");
 
         // ---- (f) TV auto-load-more fires once per bottom ----

@@ -683,6 +683,13 @@ public final class GlobalSearchScreen implements AutoCloseable {
             status.setText("先輸入一個片名。也可以搜尋英文、首字母或數字。");
             return;
         }
+        // mkoai 2.0.62: analytics — capture() is async + silent-failure.
+        try {
+            JSONObject props = new JSONObject();
+            props.put("query", query);
+            PostHogClient.capture("video_search", props);
+        } catch (Exception ignored) {
+        }
         cancelWork();
         restoringResults = false;
         submitted = query;

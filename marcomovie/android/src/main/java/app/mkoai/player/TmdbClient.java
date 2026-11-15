@@ -72,6 +72,7 @@ final class TmdbClient {
         String overview;
         double vote;
         String cast; // "A、B、C", may be ""
+        public String airInfo = ""; // mkoai 2.0.62: TVmaze 播出資訊（"今晚 21:00 · S1E2"），首頁轉換後抄到 remarks 用
 
         JSONObject toJson() {
             JSONObject o = new JSONObject();
@@ -677,6 +678,7 @@ final class TmdbClient {
     static Cms.Video toVideo(Item it) {
         Cms.Video v = new Cms.Video();
         v.id = "msearch:" + (it.title == null ? "" : it.title);
+        v.tmdbId = it.id; // mkoai 2.0.62: TMDB id 供 OMDb / Fanart 查詢用（0 = 未知）
         v.title = it.title == null ? "" : it.title;
         v.poster = it.poster == null ? "" : it.poster;
         v.backdrop = it.backdrop == null ? "" : it.backdrop;
@@ -693,5 +695,41 @@ final class TmdbClient {
     private static String trimVote(double v) {
         String s = Double.toString(Math.round(v * 10) / 10.0);
         return s.endsWith(".0") ? s.substring(0, s.length() - 2) : s;
+    }
+
+    /**
+     * mkoai 2.0.62: TMDB external ids — a title's IMDb id (movie or tv).
+     * GET {API}/{type}/{tmdbId}/external_ids. Returns the imdb_id, or
+     * null on any failure. Never throws. filesDir is reserved for a
+     * future cache and currently unused.
+     */
+    public static String externalImdbId(java.io.File filesDir, String type, int tmdbId) {
+        if (tmdbId <= 0 || type == null || type.isEmpty()) return null;
+        try {
+            JSONObject res =
+                    getJson(API + "/" + type + "/" + tmdbId + "/external_ids?api_key=" + API_KEY);
+            String id = res.optString("imdb_id", "").trim();
+            return id.isEmpty() ? null : id;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * mkoai 2.0.62: TMDB external ids — a show's TVDB id (type is always
+     * "tv"). Returns the tvdb_id, or null when absent / on any failure.
+     * Never throws. filesDir is reserved for a future cache and currently
+     * unused.
+     */
+    public static Integer externalTvdbId(java.io.File filesDir, int tmdbId) {
+        if (tmdbId <= 0) return null;
+        try {
+            JSONObject res =
+                    getJson(API + "/tv/" + tmdbId + "/external_ids?api_key=" + API_KEY);
+            int id = res.optInt("tvdb_id", 0);
+            return id <= 0 ? null : Integer.valueOf(id);
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 }

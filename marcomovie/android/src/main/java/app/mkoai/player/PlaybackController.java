@@ -953,6 +953,16 @@ final class PlaybackController {
     }
 
     static void playerPage(MainActivity a, Cms.Site s, Cms.Video v, Cms.Episode ep) {
+        // mkoai 2.0.62: analytics — properties carry only the title, never a
+        // URL or source. capture() is async + silent-failure, never blocks play.
+        if (v != null && v.title != null && !v.title.trim().isEmpty()) {
+            try {
+                org.json.JSONObject props = new org.json.JSONObject();
+                props.put("title", v.title);
+                PostHogClient.capture("video_play", props);
+            } catch (Exception ignored) {
+            }
+        }
         ep.url = LocalProxy.rewrite(ep.url);
         try {
             String dm = ep.media.optString("danmaku");

@@ -1,6 +1,7 @@
 package app.mkoai.player;
 
 import android.app.Dialog;
+import android.net.Uri;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -15,6 +16,8 @@ import android.graphics.drawable.LayerDrawable;
 import android.view.*;
 import android.widget.*;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.util.*;
 
 /** Independent TV playback controls. Every visible action is wired to playback state. */
@@ -2537,6 +2540,9 @@ final class PlaybackControls {
         labels.add("字幕大小與位置調節");
         labels.add("字幕顏色與樣式 · " + subtitleStyleLabel());
         labels.add("匯入字幕檔案…");
+        // mkoai 2.0.62: online subtitle search (SubDL + OpenSubtitles via
+        // the Worker). Index trackEnd+3 — the entry after the file import.
+        labels.add("搜尋字幕…");
         choose(
                 "CC",
                 labels.toArray(new String[0]),
@@ -2558,10 +2564,201 @@ final class PlaybackControls {
                                     a.prefs.edit().putInt(Prefs.SUBTITLE_STYLE, sIdx).apply();
                                     applySubtitleStyle();
                                 });
-                    } else {
+                    } else if (i == trackEnd + 2) {
                         a.pickSubtitle();
+                    } else if (i == trackEnd + 3) {
+                        searchSubtitlesOnline();
                     }
                 });
+    }
+
+    /**
+     * mkoai 2.0.62: online subtitle search + mount. Search runs on a worker
+     * thread; the result list shows language / provider / file name; tapping
+     * one downloads it as WebVTT, writes it to a cache temp file (2MB cap)
+     * and mounts it with {@code MoviePlayer.addExternalSubtitle} — the new
+     * track then appears in this same CC list automatically, no extra UI.
+     *
+     * <p>Accepted trade-off: once a sidecar subtitle is mounted,
+     * {@code MoviePlayer.playbackSource()} no longer uses the HLS ad-filter
+     * factory for this playback, so HLS ad-segment filtering is off for the
+     * rest of this play session.
+     */
+    void searchSubtitlesOnline() {
+        if (video == null || video.title == null || video.title.trim().isEmpty()) {
+            message("沒有正在播放的影片資訊。");
+            return;
+        }
+        final boolean isTv = VideoKind2061.kindOf(video) == VideoKind2061.SERIES;
+        final String baseTitle =
+                isTv
+                        ? MobileDetailScreen.parseSeasonMeta(video.title).baseTitle
+                        : video.title;
+        final String searchTitle =
+                baseTitle == null || baseTitle.trim().isEmpty() ? video.title : baseTitle;
+        final int season =
+                isTv ? Math.max(1, MobileDetailScreen.parseSeasonMeta(video.title).seasonNumber) : 0;
+        final int episode = isTv ? currentEpisodeNumber() : 0;
+        a.toast("正在搜尋字幕…");
+        a.worker.execute(
+                () -> {
+                    final List<SubtitleClient.SubtitleResult> results;
+                    try {
+                        results =
+                                SubtitleClient.search(
+                                        searchTitle, isTv ? "tv" : "movie", season, episode);
+                    } catch (Exception e) {
+                        a.ui.post(() -> message("字幕搜尋失敗，請稍後再試"));
+                        return;
+                    }
+                    a.ui.post(
+                            () -> {
+                                if (a.isFinishing()) return;
+                                if (results == null || results.isEmpty()) {
+                                    message("沒有找到字幕");
+                                    return;
+                                }
+                                String[] names = new String[results.size()];
+                                for (int i = 0; i < results.size(); i++) {
+                                    SubtitleClient.SubtitleResult r = results.get(i);
+                                    String lang = subtitleLanguageLabel(r.language);
+                                    String name =
+                                            r.name == null || r.name.isEmpty()
+                                                    ? "未命名"
+                                                    : r.name;
+                                    String provider =
+                                            r.provider == null ? "" : r.provider;
+                                    names[i] = lang + " · " + provider + " · " + name;
+                                }
+                                choose(
+                                        "搜尋字幕",
+                                        names,
+                                        -1,
+                                        idx -> {
+                                            if (idx < 0 || idx >= results.size()) return;
+                                            downloadAndMountSubtitle(results.get(idx));
+                                        });
+                            });
+                });
+    }
+
+    /** 1-based episode number of the episode now playing (TV only). */
+    int currentEpisodeNumber() {
+        int idx = episodeIndex();
+        if (idx >= 0) return idx + 1;
+        String name = resolved == null ? null : resolved.name;
+        if (name != null) {
+            java.util.regex.Matcher m =
+                    java.util.regex.Pattern.compile("(?:第\\s*(\\d+)\\s*集|E(\\d+))")
+                            .matcher(name);
+            if (m.find()) {
+                try {
+                    String d = m.group(1) != null ? m.group(1) : m.group(2);
+                    int n = Integer.parseInt(d);
+                    if (n > 0) return n;
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return 1;
+    }
+
+    private static String subtitleLanguageLabel(String language) {
+        if (language == null) return "未知語言";
+        String lang = language.trim();
+        if ("ZH_BG".equalsIgnoreCase(lang)
+                || "zh-TW".equalsIgnoreCase(lang)
+                || "zh-Hant".equalsIgnoreCase(lang)) return "繁中";
+        if ("EN".equalsIgnoreCase(lang) || "en".equalsIgnoreCase(lang)) return "英文";
+        return lang;
+    }
+
+    /** Download one subtitle as VTT, write it to a cache temp file, mount it. */
+    void downloadAndMountSubtitle(final SubtitleClient.SubtitleResult chosen) {
+        if (chosen == null) return;
+        a.toast("正在下載字幕…");
+        a.worker.execute(
+                () -> {
+                    final String vtt;
+                    try {
+                        vtt = SubtitleClient.downloadVtt(chosen);
+                    } catch (Exception e) {
+                        final String friendly = subtitleDownloadError(e.getMessage());
+                        a.ui.post(() -> message(friendly));
+                        return;
+                    }
+                    if (vtt == null) {
+                        a.ui.post(() -> message("字幕下載失敗，請稍後再試"));
+                        return;
+                    }
+                    final byte[] bytes;
+                    try {
+                        bytes = vtt.getBytes("UTF-8");
+                    } catch (Exception e) {
+                        a.ui.post(() -> message("字幕下載失敗，請稍後再試"));
+                        return;
+                    }
+                    if (bytes.length > 2 * 1024 * 1024) {
+                        a.ui.post(() -> message("字幕檔案超過 2MB，不支援掛載"));
+                        return;
+                    }
+                    final File file;
+                    try {
+                        file =
+                                File.createTempFile(
+                                        "movie-subtitle-", ".vtt", a.getCacheDir());
+                        FileOutputStream out = new FileOutputStream(file);
+                        try {
+                            out.write(bytes);
+                        } finally {
+                            out.close();
+                        }
+                    } catch (Exception e) {
+                        a.ui.post(() -> message("字幕儲存失敗，請稍後再試"));
+                        return;
+                    }
+                    final String displayName =
+                            chosen.name == null || chosen.name.isEmpty()
+                                    ? "外掛字幕"
+                                    : chosen.name;
+                    a.ui.post(
+                            () -> {
+                                if (a.isFinishing()
+                                        || a.player == null
+                                        || !a.prepared) {
+                                    a.toast("請等待影片開始播放");
+                                    return;
+                                }
+                                try {
+                                    a.player.addExternalSubtitle(
+                                            Uri.fromFile(file), displayName, "text/vtt");
+                                } catch (Exception e) {
+                                    a.toast("字幕掛載失敗，請稍後再試");
+                                    return;
+                                }
+                                a.toast("已掛載字幕：" + displayName);
+                                try {
+                                    org.json.JSONObject props = new org.json.JSONObject();
+                                    props.put(
+                                            "language",
+                                            chosen.language == null ? "" : chosen.language);
+                                    props.put(
+                                            "provider",
+                                            chosen.provider == null ? "" : chosen.provider);
+                                    PostHogClient.capture("subtitle_download", props);
+                                } catch (Exception ignored) {
+                                }
+                            });
+                });
+    }
+
+    private static String subtitleDownloadError(String message) {
+        if (message == null) return "字幕下載失敗，請稍後再試";
+        if (message.contains("subtitle_is_archive")) return "這個字幕是整季打包檔，無法單集掛載";
+        if (message.contains("subtitle_format_unsupported")) {
+            return "不支援的字幕格式（僅支援 SRT 轉換的字幕）";
+        }
+        return "字幕下載失敗：" + message;
     }
 
     void tracks(int type) {

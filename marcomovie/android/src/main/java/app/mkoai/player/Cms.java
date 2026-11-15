@@ -99,6 +99,8 @@ public final class Cms {
                 // or tag instead.
                 typeName;
         public long releaseTs;
+        /** mkoai 2.0.62: TMDB id (0 = unknown). Set by enrichDetailWithTmdb / TmdbClient.toVideo; used for OMDb + Fanart lookups. */
+        public int tmdbId;
         public final List<Line> lines = new ArrayList<>();
     }
 

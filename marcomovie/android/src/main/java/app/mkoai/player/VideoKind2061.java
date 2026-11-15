@@ -91,9 +91,11 @@ final class VideoKind2061 {
         if ("movie".equals(v.mediaType)) return MOVIE;
         if ("tv".equals(v.mediaType)) return SERIES;
         if ("douban".equals(v.tag)) return MOVIE;
-        // Simkl: the tag carries the kind (SimklHome, "simkl-電影" / "simkl-影劇").
-        if (v.tag != null && v.tag.startsWith("simkl-")) {
-            String kind = v.tag.substring("simkl-".length());
+        // Simkl / Trakt: the tag carries the kind ("simkl-電影" /
+        // "simkl-影劇", "trakt-電影" / "trakt-影劇" — the 2.0.62 TV
+        // ranking rows). Same word matching as the CMS category below.
+        if (v.tag != null && (v.tag.startsWith("simkl-") || v.tag.startsWith("trakt-"))) {
+            String kind = v.tag.substring(v.tag.indexOf('-') + 1);
             if (containsMovieWord(kind)) return MOVIE;
             if (containsSeriesWord(kind)) return SERIES;
             return OTHER;

@@ -1123,6 +1123,31 @@ final class SettingsScreen {
                     a.toast("已清除首頁快取");
                 });
         link("執行日誌", "檢視本機最近異常與診斷記錄", "settings-logs", this::diagnostics);
+        // mkoai 2.0.62: analytics opt-out + ntfy push test. The switch only
+        // flips the Prefs flag — PostHogClient.capture reads it and no-ops
+        // when off. The test push never retries: ntfy is rate-limited today,
+        // so a failure is expected and just shown.
+        toggle("使用分析", Prefs.ANALYTICS_ENABLED, true, null);
+        link(
+                "推播測試",
+                "發送一則測試通知到 ntfy",
+                "settings-push-test",
+                () ->
+                        a.worker.execute(
+                                () -> {
+                                    try {
+                                        NotifyClient.sendTest("mkoai 測試通知", "這是 mkoai 的推播測試。");
+                                        a.ui.post(() -> a.toast("已發送測試通知"));
+                                    } catch (Exception e) {
+                                        final String reason =
+                                                e.getMessage() == null ? "未知原因" : e.getMessage();
+                                        a.ui.post(() -> a.toast("推播測試失敗：" + reason));
+                                    }
+                                }));
+        a.paragraph(
+                "ntfy topic："
+                        + NotifyClient.TOPIC
+                        + "。在 ntfy App 訂閱這個 topic 才收得到通知。");
         link(
                 "恢復播放與外觀預設設定",
                 "保留來源配置和網盤登入",

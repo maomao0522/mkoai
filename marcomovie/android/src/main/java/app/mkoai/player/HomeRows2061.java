@@ -28,6 +28,17 @@ final class HomeRows2061 {
     static final String KIND_DOUBAN_TOP = "douban_top";
 
     /**
+     * mkoai 2.0.62: external-ranking row kinds. NOT TmdbClient kinds —
+     * the caller fetches them from TraktHome / SimklHome / TvmazeHome
+     * instead (same pattern as KIND_DOUBAN_TOP).
+     */
+    static final String KIND_TRAKT_MOVIES = "trakt_movies";
+    static final String KIND_TRAKT_SHOWS = "trakt_shows";
+    static final String KIND_SIMKL_MOVIES = "simkl_movies";
+    static final String KIND_SIMKL_SHOWS = "simkl_shows";
+    static final String KIND_TVMAZE_TONIGHT = "tvmaze_tonight";
+
+    /**
      * Phone home rows, in the reference app's order (reference rows first,
      * the pre-2.0.61 extras at the end). Each entry is {label, kind, extra}.
      * "douban_top" is NOT a TmdbClient kind — the caller fetches it from
@@ -43,6 +54,8 @@ final class HomeRows2061 {
      * subdivisions (movie subdivisions first, then drama subdivisions,
      * then documentary/kids). No subdivision is ever mixed in among
      * the broad rows. All 25 rows are kept — only the order changed.
+     * mkoai 2.0.62: 5 external-ranking rows appended after 「高分佳作」
+     * (30 rows total); the two-level order is unchanged.
      */
     static final String[][] TMDB_ROW_DEFS = {
         // Broad movies.
@@ -64,6 +77,13 @@ final class HomeRows2061 {
         // Mixed recommendation rows (just before the subdivisions).
         {"最新上架", "latest", ""},
         {"高分佳作", "top_rated", ""},
+        // mkoai 2.0.62: external rankings — after the broad/mixed rows,
+        // before the subdivisions (same two-level order as 2.0.61).
+        {"Trakt 热门电影", KIND_TRAKT_MOVIES, ""},
+        {"Trakt 热门剧集", KIND_TRAKT_SHOWS, ""},
+        {"Simkl 热门电影", KIND_SIMKL_MOVIES, ""},
+        {"Simkl 热门剧集", KIND_SIMKL_SHOWS, ""},
+        {"今晚播出", KIND_TVMAZE_TONIGHT, ""},
         // Subdivisions — movies first.
         {"动画电影", "discover_movie", "with_genres=16"},
         {"动作电影", "discover_movie", "with_genres=28"},
@@ -88,6 +108,26 @@ final class HomeRows2061 {
     /** True when this row kind is Douban-backed (fetched by DoubanHome, not TMDB). */
     static boolean isDoubanRow(String kind) {
         return KIND_DOUBAN_TOP.equals(kind);
+    }
+
+    /** True when this row kind is Trakt-backed (fetched by TraktHome, not TMDB). */
+    static boolean isTraktRow(String kind) {
+        return KIND_TRAKT_MOVIES.equals(kind) || KIND_TRAKT_SHOWS.equals(kind);
+    }
+
+    /** True when this row kind is Simkl-backed (fetched by SimklHome, not TMDB). */
+    static boolean isSimklRow(String kind) {
+        return KIND_SIMKL_MOVIES.equals(kind) || KIND_SIMKL_SHOWS.equals(kind);
+    }
+
+    /** True when this row kind is TVmaze-backed (fetched by TvmazeHome, not TMDB). */
+    static boolean isTvmazeRow(String kind) {
+        return KIND_TVMAZE_TONIGHT.equals(kind);
+    }
+
+    /** True when this row kind comes from an external ranking provider (not TMDB/Douban). */
+    static boolean isExternalRow(String kind) {
+        return isTraktRow(kind) || isSimklRow(kind) || isTvmazeRow(kind);
     }
 
     /**
