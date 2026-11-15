@@ -18,6 +18,137 @@ import org.json.JSONObject;
 /** Recent history above one category-based, vertically browsed library. */
 final class HomeScreen {
     static final int MAX_RETAINED_CARDS = 120;
+
+    /** mkoai 2.0.60: the TV home defaults to ALL sources merged. The sentinel site (key "__all__", never a real source) marks that mode; picking a source in the picker sets a real site key instead. */
+    static final String ALL_SOURCES_KEY = "__all__";
+    /** mkoai 2.0.60: TV merged-home cap — the 2.0.54 lightweight 40-card cap. Never raised to fit more sources. */
+    static final int ALL_SOURCES_CAP = 40;
+    /** mkoai 2.0.60: at most this many videos from one source in the merged home (one source must not dominate the grid). */
+    static final int ALL_SOURCES_PER_SITE_CAP = 10;
+    /** mkoai 2.0.60: shared wall-clock budget for the whole parallel aggregate fetch. A source that has not returned by then is skipped, never waited on. */
+    static final long ALL_SOURCES_BUDGET_MS = 20_000;
+    /** mkoai 2.0.60: parallel fetch threads for the aggregate (matches the search pool). */
+    static final int ALL_SOURCES_THREADS = 8;
+    /** mkoai 2.0.60: minimum interval between incremental repaints while sources stream in. */
+    static final long ALL_SOURCES_PAINT_THROTTLE_MS = 800;
+
+    static Cms.Site allSourcesSite() {
+        Cms.Site s = new Cms.Site();
+        s.key = ALL_SOURCES_KEY;
+        s.name = "全部片源";
+        s.api = "";
+        s.type = -1;
+        return s;
+    }
+
+    static boolean isAllSources(Cms.Site site) {
+        return site != null && ALL_SOURCES_KEY.equals(site.key);
+    }
+
+    /**
+     * mkoai 2.0.60: pure merge of per-source home lists — flatten, dedupe by
+     * normalized title (first source wins), cap the total. No I/O, no Android.
+     */
+    static java.util.List<Cms.Video> mergeAllSources(
+            java.util.List<java.util.List<Cms.Video>> perSource, int cap) {
+        java.util.List<Cms.Video> out = new java.util.ArrayList<>();
+        if (perSource == null) return out;
+        for (java.util.List<Cms.Video> one : perSource) mergeInto(out, one, cap, ALL_SOURCES_PER_SITE_CAP);
+        return out;
+    }
+
+    private static void mergeInto(
+            java.util.List<Cms.Video> merged,
+            java.util.List<Cms.Video> one,
+            int totalCap,
+            int perSourceCap) {
+        if (one == null) return;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (Cms.Video v : merged) {
+            String t = mergeTitleKey(v == null ? null : v.title);
+            if (!t.isEmpty()) seen.add(t);
+        }
+        int taken = 0;
+        for (Cms.Video v : one) {
+            if (merged.size() >= totalCap || taken >= perSourceCap) break;
+            if (v == null || v.id == null || v.id.trim().isEmpty()) continue;
+            String t = mergeTitleKey(v.title);
+            if (t.isEmpty() || !seen.add(t)) continue;
+            merged.add(v);
+            taken++;
+        }
+    }
+
+    /**
+     * mkoai 2.0.60: merge dedupe key. Stronger than {@link Cms#normTitle}
+     * (which only strips ASCII punctuation, so a full-width 「八仙！」 would
+     * not match 「八仙」): strips all Unicode punctuation ({@code \p{P}},
+     * including full-width ！？，。） plus whitespace, lowercased. Used only
+     * for the all-sources merge, never for sync keys.
+     */
+    private static String mergeTitleKey(String title) {
+        if (title == null) return "";
+        return title.replaceAll("[\\s\\p{P}·•・]", "").toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /**
+     * mkoai 2.0.60: run the per-source home fetches in parallel and stream
+     * the merged list to onProgress as each source returns (progressive
+     * loading — the caller paints the first cards without waiting for all
+     * sources). A slow/dead source is skipped when the shared budget
+     * expires; the fetch runs on pool threads, never the caller's thread.
+     * Returns the final merged list (dedupe by title, capped at {@code cap}).
+     */
+    static java.util.List<Cms.Video> fetchAggregated(
+            java.util.List<java.util.concurrent.Callable<java.util.List<Cms.Video>>> jobs,
+            int cap,
+            long budgetMs,
+            java.util.function.Consumer<java.util.List<Cms.Video>> onProgress) {
+        java.util.List<Cms.Video> merged = new java.util.ArrayList<>();
+        if (jobs == null || jobs.isEmpty()) return merged;
+        java.util.concurrent.ExecutorService pool =
+                java.util.concurrent.Executors.newFixedThreadPool(
+                        Math.max(1, Math.min(ALL_SOURCES_THREADS, jobs.size())),
+                        runnable -> {
+                            Thread thread = new Thread(runnable, "mkoai-home-aggregate");
+                            thread.setDaemon(true);
+                            thread.setPriority(Thread.MIN_PRIORITY);
+                            return thread;
+                        });
+        java.util.concurrent.ExecutorCompletionService<java.util.List<Cms.Video>> ecs =
+                new java.util.concurrent.ExecutorCompletionService<>(pool);
+        for (java.util.concurrent.Callable<java.util.List<Cms.Video>> job : jobs) ecs.submit(job);
+        long deadline = System.currentTimeMillis() + Math.max(0, budgetMs);
+        int received = 0;
+        try {
+            while (received < jobs.size()) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) break;
+                java.util.concurrent.Future<java.util.List<Cms.Video>> f =
+                        ecs.poll(remaining, java.util.concurrent.TimeUnit.MILLISECONDS);
+                if (f == null) break;
+                received++;
+                java.util.List<Cms.Video> one = null;
+                try {
+                    one = f.get();
+                } catch (Exception ignored) {
+                }
+                if (one != null && !one.isEmpty()) {
+                    int before = merged.size();
+                    mergeInto(merged, one, cap, ALL_SOURCES_PER_SITE_CAP);
+                    if (merged.size() > before && onProgress != null) {
+                        onProgress.accept(new java.util.ArrayList<>(merged));
+                    }
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            pool.shutdownNow();
+        }
+        return merged;
+    }
+
     final MainActivity a;
     final Cms.Site site;
     final int COLUMNS;
@@ -371,7 +502,11 @@ final class HomeScreen {
                 || retainedFontScale != a.getResources().getConfiguration().fontScale
                 || retainedEngineEpoch != a.engineEpoch
                 || !appearance().equals(retainedAppearance)
-                || !site.key.equals(a.prefs.getString(Prefs.SELECTED_SITE, ""))) return false;
+                // mkoai 2.0.60: the all-sources home is the default (no
+                // SELECTED_SITE), so "__all__" matches an empty selection.
+                || !(site.key.equals(a.prefs.getString(Prefs.SELECTED_SITE, ""))
+                        || (isAllSources(site)
+                                && a.prefs.getString(Prefs.SELECTED_SITE, "").isEmpty()))) return false;
         a.preparePage(true);
         ticket = a.generation;
         request++;
@@ -429,6 +564,140 @@ final class HomeScreen {
         return out;
     }
 
+    /**
+     * mkoai 2.0.60: all-sources home. Runs on the loadHome background thread
+     * (never the UI thread). Paints the Douban 新片 first, then fetches every
+     * configured source's cheap home listing in parallel (8 threads, 20s
+     * shared budget, one attempt per source — a slow/dead source is skipped
+     * silently) and repaints as sources stream in (throttled to ~800ms, so
+     * the grid is never rebuilt 22 times). Merged videos are deduped by
+     * normalized title and capped at the TV 40-card limit; the per-source
+     * contribution is capped at 10. Simkl trending is only a fallback when
+     * both Douban and every source yield nothing. Posters stay w342 on TV
+     * (the 2.0.54 lightweight cap) — this method never changes poster size.
+     */
+    void loadAllSources(int token, List<Cms.Video> doubanNew) {
+        // First paint: Douban 新片 right away — the user sees cards without
+        // waiting for any source.
+        final List<Cms.Video> douban = doubanNew;
+        a.ui.post(
+                () -> {
+                    if (!active() || token != request) return;
+                    snapshot =
+                            new Snapshot(
+                                    composeHomeVideos(douban, new ArrayList<>(), null),
+                                    new ArrayList<>(),
+                                    "",
+                                    1);
+                    a.homeData.put(site.key, snapshot);
+                    renderSnapshot();
+                    status.setText(douban != null && !douban.isEmpty() ? "豆瓣新片 · 正在整理全部片源…" : "正在整理全部片源…");
+                });
+        List<Cms.Site> targets = new ArrayList<>();
+        if (a.config != null && a.config.sites != null)
+            for (Cms.Site s : a.config.sites)
+                if (s != null
+                        && a.available(s)
+                        && !SourceController.isConfigOrNetdiskSite(s))
+                    targets.add(s);
+        if (targets.isEmpty()) {
+            finishAllSources(token, douban, new ArrayList<>());
+            return;
+        }
+        List<java.util.concurrent.Callable<List<Cms.Video>>> jobs = new ArrayList<>();
+        for (Cms.Site s : targets) {
+            final Cms.Site target = s;
+            jobs.add(
+                    () -> {
+                        try {
+                            SourceEngine engine = a.engine(target);
+                            String raw = engine.home();
+                            RequestScope.checkCurrent();
+                            Cms.Listing list = Cms.listing(raw);
+                            clean(list.videos);
+                            if (list.videos.isEmpty()) return null;
+                            return new ArrayList<>(
+                                    list.videos.subList(
+                                            0,
+                                            Math.min(
+                                                    ALL_SOURCES_PER_SITE_CAP,
+                                                    list.videos.size())));
+                        } catch (Throwable ignored) {
+                            return null;
+                        }
+                    });
+        }
+        final long[] lastPaint = {0};
+        List<Cms.Video> merged =
+                fetchAggregated(
+                        jobs,
+                        ALL_SOURCES_CAP,
+                        ALL_SOURCES_BUDGET_MS,
+                        partial -> {
+                            long now = System.currentTimeMillis();
+                            if (now - lastPaint[0] < ALL_SOURCES_PAINT_THROTTLE_MS) return;
+                            lastPaint[0] = now;
+                            final List<Cms.Video> painted = new ArrayList<>(partial);
+                            a.ui.post(
+                                    () -> {
+                                        if (!active() || token != request) return;
+                                        snapshot =
+                                                new Snapshot(
+                                                        composeHomeVideos(douban, painted, null),
+                                                        new ArrayList<>(),
+                                                        "",
+                                                        1);
+                                        a.homeData.put(site.key, snapshot);
+                                        renderSnapshot();
+                                    });
+                        });
+        finishAllSources(token, douban, merged);
+    }
+
+    /** Final paint for the all-sources home (Douban hot / Simkl fallbacks when empty). */
+    private void finishAllSources(
+            int token, List<Cms.Video> doubanNew, List<Cms.Video> merged) {
+        List<Cms.Video> body = merged == null ? new ArrayList<>() : merged;
+        List<Cms.Video> simklHot = null;
+        if (body.isEmpty() && (doubanNew == null || doubanNew.isEmpty())) {
+            try {
+                List<Cms.Video> hot = DoubanHome.fetchHot();
+                if (hot != null && !hot.isEmpty()) body.addAll(hot);
+            } catch (Throwable ignored) {
+            }
+            if (body.isEmpty()) {
+                for (int attempt = 0; attempt < 2 && simklHot == null; attempt++) {
+                    try {
+                        List<Cms.Video> hot = SimklHome.fetchHot();
+                        if (hot != null && !hot.isEmpty()) simklHot = hot;
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        }
+        final List<Cms.Video> composed = composeHomeVideos(doubanNew, body, simklHot);
+        final boolean hasDoubanNew = doubanNew != null && !doubanNew.isEmpty();
+        final List<Cms.Video> finalSimklHot = simklHot;
+        if (!a.reduced) {
+            Snapshot snap = new Snapshot(composed, new ArrayList<>(), "", 1);
+            a.worker.execute(() -> writeDiskSnapshot(a, site.key, snap));
+        }
+        a.ui.post(
+                () -> {
+                    a.prefs.edit().putString(Prefs.LOADING_SITE, "").apply();
+                    busy = false;
+                    if (!active() || token != request) return;
+                    snapshot =
+                            new Snapshot(composed, new ArrayList<>(), "", 1);
+                    a.homeData.put(site.key, snapshot);
+                    renderSnapshot();
+                    status.setText(
+                            hasDoubanNew
+                                    ? (finalSimklHot != null ? "豆瓣新片 · Simkl 熱門" : "豆瓣新片 · 全部片源")
+                                    : (finalSimklHot != null ? "Simkl 熱門" : "全部片源"));
+                });
+    }
+
     void loadHome() {
         if (busy) return;
         busy = true;
@@ -447,6 +716,14 @@ final class HomeScreen {
                         List<Cms.Video> n = DoubanHome.fetchNew();
                         if (n != null && !n.isEmpty()) doubanNew = n;
                     } catch (Throwable ignored) {
+                    }
+                    // mkoai 2.0.60: all-sources home — aggregate every
+                    // configured source in parallel, painting progress as
+                    // sources return. The single-source path below is
+                    // untouched when a source is explicitly picked.
+                    if (isAllSources(site)) {
+                        loadAllSources(token, doubanNew);
+                        return;
                     }
                     try {
                         SourceEngine engine = a.engine(site);

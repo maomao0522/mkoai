@@ -519,6 +519,38 @@ public final class Cms {
         return config;
     }
 
+    /**
+     * mkoai 2.0.60: built-in HLS ad rules for the three sources whose ad hosts
+     * were confirmed by measurement (see the ad sweep: 巨量's ads come from
+     * admedia.mujiziyuan99.com, 360's from vod.360zyx.vip, 魔都動漫's from
+     * play.modujx17.com). Returns the rule for a source api, or null when
+     * the api is not a known ad-carrying source. Only used when the config
+     * itself ships no hlsAdRules for the source, so an already-imported
+     * config gets the filter on upgrade with no re-import, while a user's
+     * own rule still wins.
+     */
+    static JSONObject builtinHlsAdRules(String api) {
+        if (api == null) return null;
+        String host;
+        if (api.toLowerCase(java.util.Locale.ROOT).contains("api.juliang.live")) {
+            host = "admedia.mujiziyuan99.com";
+        } else if (api.toLowerCase(java.util.Locale.ROOT).contains("360zyzz.com")) {
+            host = "vod.360zyx.vip";
+        } else if (api.toLowerCase(java.util.Locale.ROOT).contains("mdzyapi.com")) {
+            host = "play.modujx17.com";
+        } else {
+            return null;
+        }
+        try {
+            return new JSONObject()
+                    .put("enabled", true)
+                    .put("hosts", new JSONArray().put(host))
+                    .put("urlPrefixes", new JSONArray());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     public static Config parseConfig(String text, String origin) throws Exception {
         if (text == null || text.length() > MAX_JSON) throw new IOException("配置超過 4 MB 限制");
         String trimmed = text.trim().replaceFirst("^\\uFEFF", "");
@@ -692,6 +724,11 @@ public final class Cms {
             s.searchable = j.optInt("searchable", 1) != 0;
             s.ext = j.opt("ext");
             s.hlsAdRules = j.optJSONObject("hlsAdRules");
+            // mkoai 2.0.60: built-in ad rules (no re-import needed). When a
+            // source ships no hlsAdRules of its own, a known ad-carrying
+            // source gets its confirmed rule by api host. A config-provided
+            // hlsAdRules always wins (it is only filled in when null).
+            if (s.hlsAdRules == null) s.hlsAdRules = builtinHlsAdRules(s.api);
             if (origin != null && origin.startsWith("file://") && s.ext instanceof String) {
                 String ext = (String) s.ext;
                 if (ext.startsWith("./") || ext.startsWith("../")) s.ext = resolve(origin, ext);

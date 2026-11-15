@@ -687,6 +687,21 @@ public final class MainActivity extends Activity {
                     SourcePicker.applyEdits(this, config, configOrigin);
                     SourcePreferences.restoreDefault(this);
                 }
+            else
+                // mkoai 2.0.60: first run with no imported config — use the
+                // bundled 22-source default (assets/default-config.json, which
+                // already carries the 巨量 + 360 ad rules). In-memory only:
+                // it is never written to config.json, so a later user import
+                // still replaces it cleanly, and an already-imported config
+                // is never touched. A missing/broken asset falls through to
+                // the import prompt as before.
+                try (InputStream i = getAssets().open("default-config.json")) {
+                    config = Cms.parseConfig(Cms.read(i, Cms.MAX_JSON), configOrigin);
+                    SourcePicker.applyEdits(this, config, configOrigin);
+                    SourcePreferences.restoreDefault(this);
+                } catch (Exception ignored) {
+                    config = null;
+                }
         } catch (Exception e) {
             AppLog.w("MainActivity", "load saved config failed", e);
             config = null;
@@ -1618,6 +1633,16 @@ public final class MainActivity extends Activity {
         if (selected != null) {
             contentHome(selected);
             return;
+        }
+        // mkoai 2.0.60: no source pinned — the TV home defaults to ALL
+        // sources merged (not the first source, not an empty launcher). The
+        // source picker still filters to one source when one is picked.
+        if (config != null) {
+            for (Cms.Site s : config.sites)
+                if (available(s) && !SourceController.isConfigOrNetdiskSite(s)) {
+                    contentHome(HomeScreen.allSourcesSite());
+                    return;
+                }
         }
         renderPage("把今晚，留給好故事。", "YOUR OWN CINEMA", true);
         paragraph("屬於你的電視播放器。匯入自己合法獲取的配置，用遙控器瀏覽和播放。");

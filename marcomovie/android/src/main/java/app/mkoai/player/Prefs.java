@@ -101,6 +101,8 @@ final class Prefs {
     static final String EXPERIMENTAL_CSP = "experimental_csp";
     static final String FAVORITES = "favorites";
     static final String WATCH_HISTORY = "watch_history";
+    /** mkoai 2.0.60: manual ad marks (title+episode+source -> [startMs, endMs]), JSON. Local only — deliberately NOT in SYNC_SETTING_KEYS, so it is never uploaded to Supabase. */
+    static final String AD_MARKS = "ad_marks";
     static final String GLOBAL_SEARCH_HISTORY = "global_search_history";
     static final String PHONETIC_TITLES = "phonetic_titles";
 

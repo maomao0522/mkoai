@@ -1,0 +1,236 @@
+{
+  "lives": [
+    {
+      "epg": "",
+      "name": "",
+      "type": 0,
+      "url": ""
+    }
+  ],
+  "parses": [
+    {
+      "ext": {
+        "flag": [
+          "youku",
+          "qq",
+          "iqiyi",
+          "qiyi",
+          "letv",
+          "sohu",
+          "tudou",
+          "pptv",
+          "mgtv",
+          "wasu"
+        ]
+      },
+      "name": "新解析介面",
+      "type": 0,
+      "url": ""
+    }
+  ],
+  "sites": [
+    {
+      "api": "https://www.huyaapi.com/api.php/provide/vod/",
+      "filterable": 1,
+      "key": "site_1794500699195",
+      "name": "Mkoai2-虎牙",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://cj.rycjapi.com/api.php/provide/vod/",
+      "filterable": 1,
+      "key": "site_1794501772084",
+      "name": "Mkoai4",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://api.juliang.live/api/provide/vod/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000001",
+      "name": "巨量",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1,
+      "hlsAdRules": {
+        "enabled": true,
+        "hosts": [
+          "admedia.mujiziyuan99.com"
+        ],
+        "urlPrefixes": []
+      }
+    },
+    {
+      "api": "https://api.wsyzy.net/api.php/provide/vod/from/wsym3u8/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000002",
+      "name": "wsyzy",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://caiji.xgzyapi.com/api.php/provide/vod/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000004",
+      "name": "xgzy",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://caiji.mgzyapi.com/api.php/provide/vod/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000005",
+      "name": "芒果",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://360zyzz.com/api.php/provide/vod",
+      "filterable": 1,
+      "key": "site_1794510000007",
+      "name": "360",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1,
+      "hlsAdRules": {
+        "enabled": true,
+        "hosts": [
+          "vod.360zyx.vip"
+        ],
+        "urlPrefixes": []
+      }
+    },
+    {
+      "api": "https://subocj.com/api.php/provide/vod",
+      "filterable": 1,
+      "key": "site_1794510000013",
+      "name": "subocj速播",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://api.xinlangapi.com/xinlangapi.php/provide/vod/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000015",
+      "name": "xinlang新浪",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://api.guangsuapi.com/api.php/provide/vod/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000016",
+      "name": "guangsu光速",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://jyzyapi.com/provide/vod/from/jinyingm3u8/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000017",
+      "name": "jinying金鷹",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://api.apibdzy.com/api.php/provide/vod/from/dbm3u8/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000019",
+      "name": "bdzy",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://www.hongniuzy2.com/api.php/provide/vod/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000020",
+      "name": "hongniu紅牛",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://jszyapi.com/api.php/provide/vod/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000022",
+      "name": "jszy",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://cj.rycjapi.com/api.php/provide/vod/from/rym3u8/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000023",
+      "name": "Mkoai4-rym3u8",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "api": "https://api.changzhang.tv/api.php/provide/vod/at/xml/",
+      "filterable": 1,
+      "key": "site_1794510000024",
+      "name": "changzhang暢掌",
+      "quickSearch": 1,
+      "searchable": 1,
+      "type": 1
+    },
+    {
+      "key": "fresh_20261115_haohua",
+      "name": "豪華資源",
+      "type": 1,
+      "api": "https://hhzyapi.com/api.php/provide/vod/",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 0,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+      }
+    },
+    {
+      "key": "fresh_20261115_modu",
+      "name": "魔都動漫",
+      "type": 1,
+      "api": "https://www.mdzyapi.com/api.php/provide/vod/",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 0,
+      "hlsAdRules": {
+        "enabled": true,
+        "hosts": [
+          "play.modujx17.com"
+        ],
+        "urlPrefixes": []
+      },
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+      }
+    },
+    {
+      "key": "fresh_20261115_bfzy",
+      "name": "暴風資源",
+      "type": 1,
+      "api": "https://bfzyapi.com/api.php/provide/vod/",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 0,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+      }
+    }
+  ],
+  "spider": "",
+  "wallpaper": "https://api.kdcc.cn"
+}

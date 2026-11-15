@@ -28,6 +28,9 @@ final class PlaybackControls {
     static final int ICON_SPEED = 6;
     static final int ICON_MORE = 7;
     static final int ICON_QUALITY = 8;
+    /** mkoai 2.0.60: one-tap ad skip + manual ad mark. */
+    static final int ICON_SKIP_AD = 9;
+    static final int ICON_MARK_AD = 10;
 
     final MainActivity a;
     final boolean modernTv;
@@ -61,6 +64,85 @@ final class PlaybackControls {
 
     boolean isUserSeeking() {
         return touchSeeking || sliderSeeking;
+    }
+
+    // mkoai 2.0.60: manual ad marks. adMarkStartMs is the in-memory start of
+    // a mark being recorded (-1 = none); the finished [start, end) range is
+    // persisted per title+episode+source (AdMarks, local only). adSkipArmed
+    // is the auto-skip guard: after one auto-skip it stays false until the
+    // position leaves the range, so a saved range skips once per entry.
+    int adMarkStartMs = -1;
+    boolean adSkipArmed = true;
+    private int[] adMarkCache;
+    private String adMarkCacheRaw;
+
+    /** Saved ad range for the title/episode/source now playing (null = none). */
+    int[] adMarkForCurrent() {
+        String key = adMarkKey();
+        if (key.isEmpty()) return null;
+        String raw = a.prefs.getString(Prefs.AD_MARKS, "{}");
+        if (!raw.equals(adMarkCacheRaw)) {
+            adMarkCacheRaw = raw;
+            adMarkCache = AdMarks.get(raw, key);
+        }
+        return adMarkCache;
+    }
+
+    /** Storage key for the title/episode/source now playing ("" = unknown). */
+    String adMarkKey() {
+        if (video == null || video.title == null) return "";
+        return AdMarks.key(video.title, resolved == null ? null : resolved.name,
+                site == null ? "" : site.key);
+    }
+
+    /** mkoai 2.0.60: one-tap 跳過廣告 — jump to the end of the saved ad range when inside it, else +30s. */
+    void skipAd() {
+        if (a.player == null || !a.prepared) return;
+        int position = a.player.getCurrentPosition();
+        int duration = a.player.getDuration();
+        if (duration <= 0 && a.playingBookmark != null && a.playingBookmark.duration > 0) {
+            duration = a.playingBookmark.duration;
+        }
+        int[] mark = adMarkForCurrent();
+        int target = AdMarks.skipTarget(position, duration, mark);
+        if (target < 0) target = 0;
+        if (duration > 0 && target > duration) target = duration;
+        if (target == position) return;
+        recordUserSeek(target);
+        a.player.seekTo(target);
+        a.toast(mark != null && AdMarks.inRange(position, mark) ? "已跳過廣告" : "已快進 30 秒");
+        a.scheduleHide();
+    }
+
+    /** mkoai 2.0.60: 標記廣告 — tap 1 records the start, tap 2 records the end and saves the range; tapping while a full range exists clears it. */
+    void markAd() {
+        if (a.player == null || !a.prepared) return;
+        String key = adMarkKey();
+        if (key.isEmpty()) return;
+        String raw = a.prefs.getString(Prefs.AD_MARKS, "{}");
+        int[] existing = AdMarks.get(raw, key);
+        if (existing != null) {
+            a.prefs.edit().putString(Prefs.AD_MARKS, AdMarks.remove(raw, key)).apply();
+            adMarkCacheRaw = null;
+            adMarkCache = null;
+            a.toast("已清除廣告標記");
+            return;
+        }
+        int position = a.player.getCurrentPosition();
+        if (adMarkStartMs < 0) {
+            adMarkStartMs = position;
+            a.toast("已記下廣告開始");
+            return;
+        }
+        if (position <= adMarkStartMs) {
+            a.toast("結束要在開始之後");
+            return;
+        }
+        a.prefs.edit().putString(Prefs.AD_MARKS, AdMarks.put(raw, key, adMarkStartMs, position)).apply();
+        adMarkCacheRaw = null;
+        adMarkCache = null;
+        adMarkStartMs = -1;
+        a.toast("已記下廣告範圍，下次自動跳過");
     }
 
     void recordUserSeek(int targetMs) {
@@ -240,6 +322,11 @@ final class PlaybackControls {
                     });
             addModernIcon(row, "倍速", "speed", ICON_SPEED, this::speed);
             addModernIcon(row, "畫質", "quality", ICON_QUALITY, this::quality);
+            // mkoai 2.0.60: ad skip + ad mark (VOD only — live has no markable range).
+            if (!live) {
+                addModernIcon(row, "跳過廣告", "skip-ad", ICON_SKIP_AD, this::skipAd);
+                addModernIcon(row, "標記廣告", "mark-ad", ICON_MARK_AD, this::markAd);
+            }
             addModernIcon(row, "⋯", "more", ICON_MORE, this::more);
             registerHiddenAction("decoder", this::decoderMenu);
             registerHiddenAction("aspect", this::aspect);
@@ -276,6 +363,12 @@ final class PlaybackControls {
             add(row, "⚙", "decoder", this::decoderMenu);
             add(row, "OP", "skip-intro-tool", () -> skip(true));
             add(row, "ED", "skip-outro-tool", () -> skip(false));
+            // mkoai 2.0.60: ad skip + ad mark (VOD only). 4-char labels need a
+            // wider button than the default 58dp text button.
+            if (!live) {
+                widenAdButton(add(row, "跳過廣告", "skip-ad", this::skipAd));
+                widenAdButton(add(row, "標記廣告", "mark-ad", this::markAd));
+            }
             add(row, "⋯", "more", this::more);
             // Keep aspect/subtitles action references in map for programmatic callers
             registerHiddenAction("aspect", this::aspect);
@@ -330,6 +423,11 @@ final class PlaybackControls {
             add(row, "OP", "skip-intro-tool", () -> skip(true));
             add(row, "ED", "skip-outro-tool", () -> skip(false));
             add(row, "↻", "repeat-tool", this::repeat);
+            // mkoai 2.0.60: ad skip + ad mark (VOD only).
+            if (!live) {
+                widenAdButton(add(row, "跳過廣告", "skip-ad", this::skipAd));
+                widenAdButton(add(row, "標記廣告", "mark-ad", this::markAd));
+            }
             if (live) {
                 for (String vodKey :
                         new String[] {
@@ -975,6 +1073,38 @@ final class PlaybackControls {
                         c.drawText("HD", cx, ty, p);
                         break;
                     }
+                case ICON_SKIP_AD:
+                    {
+                        // mkoai 2.0.60: double chevron = skip forward (the ad).
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(Math.max(1.8f, r * .095f));
+                        path.reset();
+                        path.moveTo(cx - r * .30f, cy - r * .24f);
+                        path.lineTo(cx - r * .04f, cy);
+                        path.lineTo(cx - r * .30f, cy + r * .24f);
+                        c.drawPath(path, p);
+                        path.reset();
+                        path.moveTo(cx, cy - r * .24f);
+                        path.lineTo(cx + r * .26f, cy);
+                        path.lineTo(cx, cy + r * .24f);
+                        c.drawPath(path, p);
+                        break;
+                    }
+                case ICON_MARK_AD:
+                    {
+                        // mkoai 2.0.60: flag = mark the ad range.
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(Math.max(1.8f, r * .095f));
+                        c.drawLine(cx - r * .18f, cy - r * .30f, cx - r * .18f, cy + r * .30f, p);
+                        p.setStyle(Paint.Style.FILL);
+                        path.reset();
+                        path.moveTo(cx - r * .18f, cy - r * .30f);
+                        path.lineTo(cx + r * .30f, cy - r * .14f);
+                        path.lineTo(cx - r * .18f, cy + r * .02f);
+                        path.close();
+                        c.drawPath(path, p);
+                        break;
+                    }
                 case ICON_MORE:
                 default:
                     {
@@ -1005,6 +1135,8 @@ final class PlaybackControls {
             case "decoder": return "播放核心";
             case "skip-intro-tool": return "跳過片頭";
             case "skip-outro-tool": return "跳過片尾";
+            case "skip-ad": return "跳過廣告";
+            case "mark-ad": return "標記廣告";
             case "repeat-tool": return "重複播放";
             case "more": return "更多播放設定";
             default: return fallback;
@@ -1055,6 +1187,14 @@ final class PlaybackControls {
         row.addView(b, size);
         buttons.put(key, b);
         return b;
+    }
+
+    /** mkoai 2.0.60: widen a 4-char text button (跳過廣告 / 標記廣告) so the label is not ellipsised. */
+    private void widenAdButton(Button b) {
+        if (b == null || !(b.getLayoutParams() instanceof LinearLayout.LayoutParams)) return;
+        LinearLayout.LayoutParams size = (LinearLayout.LayoutParams) b.getLayoutParams();
+        size.width = a.dp(a.isTvDevice() ? 96 : 104);
+        b.setLayoutParams(size);
     }
 
     int lineIndex() {
@@ -2984,6 +3124,26 @@ final class PlaybackControls {
             timeline.setEnabled(false);
             timeline.setMax(100);
             timeline.setProgress(0);
+        }
+        // mkoai 2.0.60: auto-skip a saved ad range for this title/episode/
+        // source. Skips once per entry (adSkipArmed) and re-arms only when
+        // the position leaves the range; seeking back into the ad skips
+        // again, pausing inside it does not loop. Runs on the 1s clock tick
+        // (PlaybackController.clock), never on a tap.
+        int[] adMark = adMarkForCurrent();
+        if (adMark != null) {
+            if (AdMarks.inRange(position, adMark)) {
+                if (adSkipArmed && a.playing) {
+                    adSkipArmed = false;
+                    recordUserSeek(adMark[1]);
+                    a.player.seekTo(adMark[1]);
+                    a.toast("已跳過廣告");
+                }
+            } else {
+                adSkipArmed = true;
+            }
+        } else {
+            adSkipArmed = true;
         }
         int tail = a.prefs.getInt(Prefs.SKIP_OUTRO, 0) * 1000;
         if (!transitioning

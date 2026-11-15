@@ -182,10 +182,10 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.59"' in ev and "20060" in ev, "edition-versions.json = 2.0.59 / 20060")
+    check('"2.0.60"' in ev and "20061" in ev, "edition-versions.json = 2.0.60 / 20061")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.59"' in man and 'android:versionCode="20060"' in man,
-          "AndroidManifest.xml = 2.0.59 / 20060")
+    check('android:versionName="2.0.60"' in man and 'android:versionCode="20061"' in man,
+          "AndroidManifest.xml = 2.0.60 / 20061")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

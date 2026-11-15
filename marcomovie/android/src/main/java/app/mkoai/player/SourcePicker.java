@@ -274,6 +274,63 @@ final class SourcePicker {
         panel.addView(viewport, new LinearLayout.LayoutParams(-1, defaultViewportH));
         String selected = a.prefs.getString(Prefs.SELECTED_SITE, "");
         View selectedCard = null;
+        // mkoai 2.0.60: "全部片源" — the TV home default (all sources merged).
+        // Selecting it clears the pinned source so the home returns to the
+        // merged view. It is not a real source, so it has no delete button.
+        {
+            boolean current = selected.isEmpty();
+            LinearLayout card = a.row();
+            card.setTag("source-choice:" + HomeScreen.ALL_SOURCES_KEY);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(a.dp(12), a.dp(10), a.dp(8), a.dp(10));
+            card.setFocusable(true);
+            card.setClickable(true);
+            MobileDetailScreen.bindTouchFeedback(card);
+            if (tv) card.setFocusable(true);
+            TextView playIcon = a.text("▶", 12, Color.WHITE);
+            playIcon.setGravity(Gravity.CENTER);
+            playIcon.setBackground(a.bg(0xff34c759, 999));
+            LinearLayout.LayoutParams iconLp =
+                    new LinearLayout.LayoutParams(a.dp(32), a.dp(32));
+            iconLp.rightMargin = a.dp(12);
+            card.addView(playIcon, iconLp);
+            LinearLayout texts = a.vertical();
+            TextView name = a.text("全部片源", 15, 0xff111111);
+            name.setTypeface(null, Typeface.BOLD);
+            name.setSingleLine(true);
+            texts.addView(name);
+            TextView subTv = a.text(a.config.sites.size() + " 個片源一起顯示 · 主頁預設", 12, 0xff6b7280);
+            subTv.setSingleLine(true);
+            subTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            subTv.setPadding(0, a.dp(2), 0, 0);
+            texts.addView(subTv);
+            card.addView(texts, new LinearLayout.LayoutParams(0, -2, 1f));
+            LinearLayout right = a.vertical();
+            right.setGravity(Gravity.CENTER_HORIZONTAL);
+            View dot = new View(a);
+            dot.setBackground(a.bg(0xff34c759, 999));
+            LinearLayout.LayoutParams dotLp =
+                    new LinearLayout.LayoutParams(a.dp(10), a.dp(10));
+            dotLp.bottomMargin = a.dp(6);
+            right.addView(dot, dotLp);
+            TextView mark =
+                    a.text(current ? "✓" : "›", current ? 15 : 16,
+                            current ? 0xff34c759 : 0xff9ca3af);
+            mark.setTypeface(null, Typeface.BOLD);
+            mark.setGravity(Gravity.CENTER);
+            right.addView(mark);
+            LinearLayout.LayoutParams rightLp = new LinearLayout.LayoutParams(-2, -2);
+            rightLp.leftMargin = a.dp(10);
+            card.addView(right, rightLp);
+            Runnable paint = () -> card.setBackground(sourceCardBg(a, current, card.hasFocus()));
+            card.setOnFocusChangeListener((v, f) -> paint.run());
+            paint.run();
+            card.setOnClickListener(v -> selectAllSources(a, dialog));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.bottomMargin = a.dp(8);
+            grid.addView(card, lp);
+            if (current) selectedCard = card;
+        }
         // mkoai 2.0.38 (VidHub style): one clean light card per source
         // (was a 2-3 column dark button grid). Each card shows the play
         // icon, name, host/type, a status dot and a selected check; the
@@ -494,6 +551,18 @@ final class SourcePicker {
                 .edit()
                 .putString(Prefs.SELECTED_SITE, site.key)
                 .putString(Prefs.LOADING_SITE, site.key)
+                .commit();
+        dialog.dismiss();
+        a.back.clear();
+        a.open(new MainActivity.Screen(a::home), false);
+    }
+
+    /** mkoai 2.0.60: select "全部片源" (the TV home default) — clear the pinned source so the home merges all sources. */
+    private static void selectAllSources(MainActivity a, Dialog dialog) {
+        a.prefs
+                .edit()
+                .remove(Prefs.SELECTED_SITE)
+                .putString(Prefs.LOADING_SITE, HomeScreen.ALL_SOURCES_KEY)
                 .commit();
         dialog.dismiss();
         a.back.clear();
