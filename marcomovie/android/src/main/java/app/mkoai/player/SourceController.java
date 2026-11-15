@@ -814,7 +814,7 @@ final class SourceController {
 
     static void onActivityResult(MainActivity a, int request, int result, Intent data) {
         if (request == UpdateScreen.INSTALL) {
-            UpdateScreen.result(a);
+            UpdateScreen.result(a, result);
             return;
         }
         if (request >= 44 && request <= 46) {

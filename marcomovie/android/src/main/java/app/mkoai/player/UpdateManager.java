@@ -63,7 +63,7 @@ final class UpdateManager {
         prefs = preferences;
         connector = connection;
         int code = installedCode(c), old = prefs.getInt("installed_code", code);
-        if (code > old) {
+        if (shouldDeleteAfterUpgrade(code, old)) {
             prefs.edit()
                     .putString("result", "已升級至 " + installedVersion(context) + "。" + bridgeNote())
                     .remove("download_sha")
@@ -160,6 +160,33 @@ final class UpdateManager {
 
     File apk() {
         return new File(folder(), "release.apk");
+    }
+
+    /**
+     * mkoai 2.0.61 (e): after a confirmed successful install, the
+     * downloaded APK (~60 MB in the app cache) is no longer needed —
+     * remove it. Only the finished release.apk and its download_sha
+     * marker are removed; a partial release.part (a newer download in
+     * progress) is never touched. Call only on success — a failed or
+     * cancelled install keeps the APK so the user can retry without
+     * re-downloading. (The constructor already deletes it on the next
+     * launch after an upgrade; this covers the case where the old
+     * process survives long enough to receive the install result.)
+     */
+    void deleteDownloadedApk() {
+        apk().delete();
+        prefs.edit().remove("download_sha").apply();
+    }
+
+    /**
+     * mkoai 2.0.61 (e): pure decision behind the constructor's
+     * post-upgrade cleanup — the downloaded APK is deleted on the next
+     * launch when the running version is newer than the version
+     * recorded at the last UpdateManager construction (i.e. an install
+     * of the downloaded version succeeded while the app was away).
+     */
+    static boolean shouldDeleteAfterUpgrade(int installedCode, int recordedCode) {
+        return installedCode > recordedCode;
     }
 
     boolean ready() {

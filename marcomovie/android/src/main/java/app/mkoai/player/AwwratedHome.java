@@ -414,9 +414,8 @@ final class AwwratedHome {
         }
         if (eng == null) {
             for (int i = 0; i < sourceKeys.size() && i < engs.size(); i++) {
-                if (SourcePreferences.PRIORITY_SOURCE_APIS.length > 0
-                        && SourcePreferences.PRIORITY_SOURCE_APIS[0].equals(
-                                sourceKeys.get(i))) {
+                // 2.0.61 (k): the first priority source is 巨量 (index 0).
+                if (SourcePreferences.priorityIndex(sourceKeys.get(i)) == 0) {
                     eng = engs.get(i);
                     key = sourceKeys.get(i);
                     break;

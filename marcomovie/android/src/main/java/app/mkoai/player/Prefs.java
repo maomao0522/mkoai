@@ -189,7 +189,7 @@ final class Prefs {
         ranges.put(VIDEO_OUTPUT, new int[] {0, 1});
         ranges.put(DECODER_MODE, new int[] {0, 2});
         ranges.put(REPEAT_MODE, new int[] {0, 2});
-        ranges.put(ASPECT, new int[] {0, 4});
+        ranges.put(ASPECT, new int[] {0, 6});
         ranges.put(BUFFER_SECONDS, new int[] {15, 50});
         ranges.put(SKIP_INTRO, new int[] {0, 180});
         ranges.put(SKIP_OUTRO, new int[] {0, 180});

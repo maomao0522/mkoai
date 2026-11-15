@@ -766,12 +766,13 @@ final class MobileIosSettings {
                             int aspect = a.prefs.getInt(Prefs.ASPECT, 0);
                             // 2.0.41: 「自動」 = fit, never crops (was 「自動填滿」,
                             // which zoomed to fill and cropped the picture).
+                            // 2.0.61 (l): modes 5/6 fill one dimension only.
                             addChoices(
                                     a,
                                     body,
                                     "預設畫面比例",
-                                    new String[] {"自動", "鋪滿螢幕", "16:9", "4:3", "裁切填充"},
-                                    Math.max(0, Math.min(4, aspect)),
+                                    new String[] {"自動", "鋪滿螢幕", "16:9", "4:3", "裁切填充", "上下填滿", "左右填滿"},
+                                    Math.max(0, Math.min(6, aspect)),
                                     idx -> {
                                         a.prefs.edit().putInt(Prefs.ASPECT, idx).apply();
                                         ctl.rerenderInPlace();

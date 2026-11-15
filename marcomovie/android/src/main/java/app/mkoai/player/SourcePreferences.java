@@ -207,28 +207,60 @@ final class SourcePreferences {
      * prefer. Auto-select and cross-source search try these first, in list
      * order (a source is used only when it actually has the title; when it
      * doesn't, or playback fails, selection falls back to the other
-     * sources). Identified by api URL — stable, since site keys are
-     * config-generated. Extensible: append a new api URL here to prefer
-     * another source. Verified live 2026-11-13:
-     * <ul>
-     *   <li>巨量 (api.juliang.live) — the ONLY source whose 《時尚戰爭》 Ep 1
-     *   detail returns jlm3u8 / jlplayer lines; no sponsor ads.</li>
-     *   <li>xgzy (caiji.xgzyapi.com) — the ONLY source whose 《急診室的奇蹟》
-     *   Ep 01 detail returns the xiguam3u8 line; no sponsor ads.</li>
-     * </ul>
+     * sources).
+     *
+     * <p>mkoai 2.0.61 (k): the three sources with HLS ad-filter rules are
+     * now the top preference — their ads can be removed — in this order:
+     * 巨量 (least ad time, ~38.7s), 360 (~140.5s), 魔都動漫 (~141.1s).
+     * xgzy (previously #2, chosen because its lines have no burned-in ads)
+     * moves to just after them. Identified by api host substring — stable
+     * across config URL variants (360 is "360zyzz.com/api.php/provide/vod",
+     * 魔都動漫 is "www.mdzyapi.com/api.php/provide/vod/"); the same host
+     * matching the ad rules use (Cms.builtinHlsAdRules). Extensible: append
+     * a new host here to prefer another source.
      */
-    static final String[] PRIORITY_SOURCE_APIS = {
-        "https://api.juliang.live/api/provide/vod/at/xml/",
-        "https://caiji.xgzyapi.com/api.php/provide/vod/at/xml/",
+    static final String[] PRIORITY_SOURCE_HOSTS = {
+        "api.juliang.live",   // 巨量
+        "360zyzz.com",        // 360
+        "mdzyapi.com",        // 魔都動漫
+        "caiji.xgzyapi.com",  // xgzy
     };
+
+    /** True when this api URL belongs to the given priority host. */
+    static boolean apiMatchesHost(String api, String host) {
+        if (api == null || host == null || host.isEmpty()) return false;
+        return api.toLowerCase(java.util.Locale.ROOT)
+                .contains(host.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    /** Index of this api URL in the priority list, or -1 when not prioritized. */
+    static int priorityIndex(String api) {
+        if (api == null) return -1;
+        for (int i = 0; i < PRIORITY_SOURCE_HOSTS.length; i++) {
+            if (apiMatchesHost(api, PRIORITY_SOURCE_HOSTS[i])) return i;
+        }
+        return -1;
+    }
 
     /** Index of this source in the priority list, or -1 when not prioritized. */
     static int priorityIndex(Cms.Site site) {
-        if (site == null || site.api == null) return -1;
-        for (int i = 0; i < PRIORITY_SOURCE_APIS.length; i++) {
-            if (PRIORITY_SOURCE_APIS[i].equals(site.api)) return i;
+        return site == null ? -1 : priorityIndex(site.api);
+    }
+
+    /**
+     * Full api URL of the highest-priority source present in the config
+     * (巨量 first), or "" when none. Used where a concrete api URL is
+     * needed (e.g. a live poster fetch) rather than just the order.
+     */
+    static String firstPriorityApi(MainActivity a) {
+        if (a == null || a.config == null || a.config.sites == null) return "";
+        for (String host : PRIORITY_SOURCE_HOSTS) {
+            for (Cms.Site s : a.config.sites) {
+                if (s != null && apiMatchesHost(s.api, host))
+                    return s.api == null ? "" : s.api;
+            }
         }
-        return -1;
+        return "";
     }
 
     static List<Cms.Site> prioritized(MainActivity a, List<Cms.Site> sites) {
@@ -249,9 +281,9 @@ final class SourcePreferences {
             }
         }
         // 2. priority (ad-free) sources, in list order.
-        for (String api : PRIORITY_SOURCE_APIS) {
+        for (String host : PRIORITY_SOURCE_HOSTS) {
             for (Cms.Site site : sites) {
-                if (api.equals(site.api) && !seen.contains(identity(site))) {
+                if (apiMatchesHost(site.api, host) && !seen.contains(identity(site))) {
                     ordered.add(site);
                     seen.add(identity(site));
                 }

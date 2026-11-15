@@ -98,6 +98,55 @@ final class DoubanHome {
         return out;
     }
 
+    // mkoai 2.0.61: Douban top-rated films （豆瓣高分） for the phone home
+    // row — highest-rated first (sort=R). Direct Douban only: no Worker
+    // route exists for this list yet (the /api/douban/new route covers
+    // new films, not top-rated). Same endpoint shape, UA + Referer as
+    // fetchNew. Returns TmdbClient.Item so it slots into the same
+    // metadata-job list as the TMDB rows; the caller tags the cards
+    // "douban" after TmdbClient.toVideo. Throws when the fetch or parse
+    // fails — the caller hides the row (fail-soft). Douban cannot be
+    // reached from the dev VM (HTTP 000), so this is fixture-tested;
+    // verify on the phone.
+    private static final String TOP_URL =
+            "https://movie.douban.com/j/search_subjects"
+                    + "?type=movie&tag=%E8%B1%86%E7%93%A3%E9%AB%98%E5%88%86"
+                    + "&sort=R&range=0,10&playable=1&start=0";
+    private static final int TOP_MAX = 10;
+
+    /** Fetch Douban top-rated films (direct Douban; throws on failure). */
+    static List<TmdbClient.Item> fetchTopRatedItems() throws Exception {
+        return parseTopRated(Cms.fetch(TOP_URL, headers()));
+    }
+
+    /** Parse a search_subjects payload into TMDB items (cap 10). Throws on bad JSON. */
+    static List<TmdbClient.Item> parseTopRated(String raw) throws Exception {
+        JSONObject root = new JSONObject(raw);
+        JSONArray data = root.optJSONArray("data");
+        List<TmdbClient.Item> out = new ArrayList<>();
+        if (data == null) return out;
+        for (int i = 0; i < data.length() && out.size() < TOP_MAX; i++) {
+            JSONObject o = data.optJSONObject(i);
+            if (o == null) continue;
+            String title = o.optString("title", "").trim();
+            if (title.isEmpty()) continue;
+            TmdbClient.Item it = new TmdbClient.Item();
+            it.type = "movie"; // search_subjects?type=movie is movies only
+            it.title = title;
+            it.poster = o.optString("cover", "");
+            it.year = o.optString("year", "");
+            it.date = ""; // no full date in the payload — fails open in
+            // the 48h release-delay check (kept, not dropped).
+            try {
+                it.vote = Double.parseDouble(o.optString("rate", "").trim());
+            } catch (NumberFormatException ignored) {
+                it.vote = 0;
+            }
+            out.add(it);
+        }
+        return out;
+    }
+
     /** Fetch Douban hot titles. Throws on network/parse failure (caller falls back). */
     static List<Cms.Video> fetchHot() throws Exception {
         Map<String, String> headers = new HashMap<>();

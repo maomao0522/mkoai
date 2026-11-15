@@ -63,18 +63,39 @@ final class HomeScreen {
             int totalCap,
             int perSourceCap) {
         if (one == null) return;
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        for (Cms.Video v : merged) {
+        // Title key -> slot in the merged list, so a duplicate from a
+        // higher-priority source can replace the copy already there.
+        java.util.Map<String, Integer> slotByKey = new java.util.HashMap<>();
+        for (int i = 0; i < merged.size(); i++) {
+            Cms.Video v = merged.get(i);
             String t = mergeTitleKey(v == null ? null : v.title);
-            if (!t.isEmpty()) seen.add(t);
+            if (!t.isEmpty()) slotByKey.put(t, i);
         }
         int taken = 0;
         for (Cms.Video v : one) {
             if (merged.size() >= totalCap || taken >= perSourceCap) break;
             if (v == null || v.id == null || v.id.trim().isEmpty()) continue;
             String t = mergeTitleKey(v.title);
-            if (t.isEmpty() || !seen.add(t)) continue;
+            if (t.isEmpty()) continue;
+            Integer slot = slotByKey.get(t);
+            if (slot != null) {
+                // 2.0.61 (k): the same title from another source — keep the
+                // copy from the higher-priority source (ad-rule sources
+                // first: 巨量, 360, 魔都動漫, then xgzy). The replacement
+                // takes one of this source's per-source slots, so the
+                // per-source cap still holds. The result is the same no
+                // matter which source answered first.
+                int oldRank =
+                        SourcePreferences.priorityIndex(merged.get(slot).sourceApi);
+                int newRank = SourcePreferences.priorityIndex(v.sourceApi);
+                if (newRank >= 0 && (oldRank < 0 || newRank < oldRank)) {
+                    merged.set(slot, v);
+                    taken++;
+                }
+                continue;
+            }
             merged.add(v);
+            slotByKey.put(t, merged.size() - 1);
             taken++;
         }
     }
@@ -310,18 +331,13 @@ final class HomeScreen {
                 pill(
                         "載入更多",
                         "home-load-more",
-                        () -> {
-                            if (snapshot == null
-                                    || (snapshot.recommendationsPending
-                                            && state.category.isEmpty())) {
-                                loadHome();
-                                return;
-                            }
-                            if (windowEnd() < state.videos.size()) {
-                                showWindow(state.windowStart + windowSize());
-                                return;
-                            }
-                            loadCategory(!state.ready);
+                        this::onLoadMore,
+                        (v, focused) -> {
+                            // mkoai 2.0.61 (f): auto-load-more — the user
+                            // D-padded to the bottom and this pill gained
+                            // focus, so load the next batch without a
+                            // press. The pill stays as a manual fallback.
+                            if (focused) autoLoadMore();
                         });
         LinearLayout footer = a.row();
         footer.setClipChildren(false);
@@ -551,14 +567,19 @@ final class HomeScreen {
             List<Cms.Video> sourceVideos,
             List<Cms.Video> simklHot) {
         List<Cms.Video> out = new ArrayList<>();
+        // 2.0.61 (h): the 推薦 grid shows only movies and dramas/series.
+        // Douban 新片 are movies (their tag classifies them as such); the
+        // source and Simkl bodies are filtered the same way.
         if (doubanNew != null) {
-            for (Cms.Video v : doubanNew) {
+            for (Cms.Video v : VideoKind2061.filterRecommendations(doubanNew)) {
                 if (v != null && v.id != null && !v.id.trim().isEmpty()) out.add(v);
             }
         }
         List<Cms.Video> body = null;
-        if (sourceVideos != null && !sourceVideos.isEmpty()) body = sourceVideos;
-        else if (simklHot != null && !simklHot.isEmpty()) body = simklHot;
+        if (sourceVideos != null && !sourceVideos.isEmpty())
+            body = VideoKind2061.filterRecommendations(sourceVideos);
+        else if (simklHot != null && !simklHot.isEmpty())
+            body = VideoKind2061.filterRecommendations(simklHot);
         if (body != null) out.addAll(body);
         clean(out);
         return out;
@@ -615,6 +636,16 @@ final class HomeScreen {
                             RequestScope.checkCurrent();
                             Cms.Listing list = Cms.listing(raw);
                             clean(list.videos);
+                            // 2.0.61 (k): tag each video with its source, so
+                            // the merged dedup can prefer the higher-priority
+                            // source's copy of the same title.
+                            for (Cms.Video v : list.videos) {
+                                if (v != null
+                                        && (v.sourceApi == null
+                                                || v.sourceApi.isEmpty())) {
+                                    v.sourceApi = target.api;
+                                }
+                            }
                             if (list.videos.isEmpty()) return null;
                             return new ArrayList<>(
                                     list.videos.subList(
@@ -1871,6 +1902,68 @@ final class HomeScreen {
     }
 
     /** Shows or hides "加载更多" without ever hiding it while it still holds focus. */
+    /** mkoai 2.0.61 (f): the action behind the 「載入更多」 pill — shared by the manual press and the auto-load trigger. */
+    void onLoadMore() {
+        if (snapshot == null
+                || (snapshot.recommendationsPending && state.category.isEmpty())) {
+            loadHome();
+            return;
+        }
+        if (windowEnd() < state.videos.size()) {
+            showWindow(state.windowStart + windowSize());
+            return;
+        }
+        loadCategory(!state.ready);
+    }
+
+    /** mkoai 2.0.61 (f): key of the last bottom the auto-load fired for (category + window + page + count). */
+    private String lastAutoLoadKey;
+
+    /**
+     * mkoai 2.0.61 (f): pure auto-load decision (JVM-testable). Fires
+     * only when the screen is active, nothing is loading, the pill is
+     * shown, there IS more (another window or another category page),
+     * and this bottom has not already fired — focus lost and regained
+     * without new content must not reload. The recommendations-pending
+     * case (loadHome) is never auto-fired: updateMore() hides the pill
+     * then, and the manual press keeps that path.
+     */
+    static boolean shouldAutoLoadMore(
+            boolean active,
+            boolean busy,
+            boolean moreShown,
+            boolean hasMoreWindow,
+            boolean hasMorePages,
+            String key,
+            String lastKey) {
+        if (!active || busy || !moreShown) return false;
+        if (!hasMoreWindow && !hasMorePages) return false;
+        return key != null && !key.equals(lastKey);
+    }
+
+    /** mkoai 2.0.61 (f): auto-load when the 「載入更多」 pill gains focus. */
+    void autoLoadMore() {
+        if (more == null) return;
+        String key =
+                state.category
+                        + ":"
+                        + state.windowStart
+                        + ":"
+                        + state.page
+                        + ":"
+                        + state.videos.size();
+        if (!shouldAutoLoadMore(
+                active(),
+                busy,
+                more.isShown(),
+                windowEnd() < state.videos.size(),
+                state.page < state.pages,
+                key,
+                lastAutoLoadKey)) return;
+        lastAutoLoadKey = key;
+        onLoadMore();
+    }
+
     void updateMore() {
         more.setText(windowEnd() < state.videos.size() ? "檢視後面的影片" : "載入更多");
         boolean hasMore = windowEnd() < state.videos.size() || state.page < state.pages;
@@ -1948,6 +2041,8 @@ final class HomeScreen {
         artWrap.addView(art, new FrameLayout.LayoutParams(-1, -1));
         // 2.0.40: year bottom-left on the poster.
         MobileShell.addPosterOverlay(a, artWrap, video.remarks, video.year);
+        // 2.0.61 (j): 「電影」 / 「劇」 chip at the poster's top-left corner.
+        VideoKind2061.addTypeBadge(a, artWrap, video);
         card.addView(
                 artWrap,
                 new LinearLayout.LayoutParams(a.dp(posterWidth), a.dp(posterWidth * 1.5f)));
@@ -2017,6 +2112,19 @@ final class HomeScreen {
     }
 
     TextView pill(String label, String tag, Runnable action) {
+        return pill(label, tag, action, null);
+    }
+
+    /**
+     * mkoai 2.0.61 (f): pill with an optional extra focus hook. The hook
+     * runs AFTER the outline styling — it never replaces it (replacing
+     * the focus listener would drop the pill's focus ring).
+     */
+    TextView pill(
+            String label,
+            String tag,
+            Runnable action,
+            android.view.View.OnFocusChangeListener focusHook) {
         TextView b = a.text(label, 12f * navScale, MainActivity.WHITE);
         single(b);
         b.setGravity(Gravity.CENTER);
@@ -2027,7 +2135,11 @@ final class HomeScreen {
         focusable(b, tag);
         b.setBackground(a.bg(0xff24242b, radius));
         b.setOnClickListener(v -> action.run());
-        b.setOnFocusChangeListener((v, f) -> outline(b, f, radius, 0xff24242b));
+        b.setOnFocusChangeListener(
+                (v, f) -> {
+                    outline(b, f, radius, 0xff24242b);
+                    if (focusHook != null) focusHook.onFocusChange(v, f);
+                });
         return b;
     }
 

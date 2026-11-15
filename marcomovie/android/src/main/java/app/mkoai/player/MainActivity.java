@@ -1625,6 +1625,22 @@ public final class MainActivity extends Activity {
             MobileShell.show(this);
             return;
         }
+        // mkoai 2.0.61 (i): one-time migration — the 2.0.60 merged home only
+        // applied when NO source was pinned, but every pre-2.0.60 user has a
+        // source pinned (picking a source was the only home mode then), so
+        // the merged default never engaged for them and the home kept showing
+        // one source. Clear a pre-2.0.61 pin once, so the merged default
+        // takes effect on the first home load after the upgrade. A source
+        // picked in the picker AFTER this migration still pins normally
+        // (and the picker is only reachable after home() has run, so the
+        // migration can never clear a fresh pick). Phone home untouched —
+        // this is the TV branch only.
+        if (!prefs.getBoolean("tv_merged_default_migrated", false)) {
+            prefs.edit()
+                    .putBoolean("tv_merged_default_migrated", true)
+                    .remove(Prefs.SELECTED_SITE)
+                    .apply();
+        }
         Cms.Site selected = null;
         if (config != null)
             for (Cms.Site s : config.sites)
@@ -2079,6 +2095,10 @@ public final class MainActivity extends Activity {
         activeActivity = this;
         foreground = true;
         CspEngine.syncAllPluginActivities(this);
+        // mkoai 2.0.61 (d): back from the system permission settings —
+        // restore the update screen / offer the install (no-op unless
+        // the user left for the permission settings from install()).
+        UpdateScreen.resumeAfterPermission(this);
         // mkoai 2.0.43: 回到前景自動下拉合併（SupabaseSync 內 60 秒節流；播放中不拉，
         // 免得寫入歷史打斷播放）。App 啟動下載與手動「立即同步」不受影響。
         if (!privateMode && !playing) SupabaseSync.downloadOnResume(this);

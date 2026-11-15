@@ -85,7 +85,19 @@ public final class Cms {
                 // sources, not just the current one). A tap opens the
                 // detail page on that source, whose ids are the ones that
                 // exist there. Null means "current source".
-                sourceApi;
+                sourceApi,
+                // mkoai 2.0.61: media type from TMDB ("movie" | "tv") —
+                // the home year line uses it ("2026 - 现在" for an
+                // airing TV show). Set by TmdbClient.toVideo only.
+                mediaType,
+                // mkoai 2.0.61 (h)(j): the CMS category name of this video
+                // (per-video "type_name" in JSON, the <type> tag in XML:
+                // 電影 / 電視劇 / 綜藝 / 動漫 …). Unlike genre, this is the
+                // category, so VideoKind2061 can tell a movie from a series
+                // even when vod_class holds genre tags (e.g. "劇情"). Empty
+                // for TMDB/Douban/Simkl items, which classify by mediaType
+                // or tag instead.
+                typeName;
         public long releaseTs;
         public final List<Line> lines = new ArrayList<>();
     }
@@ -1327,6 +1339,9 @@ public final class Cms {
         v.year = j.optString("vod_year");
         v.area = j.optString("vod_area");
         v.genre = j.optString("vod_class", j.optString("type_name"));
+        // 2.0.61 (h)(j): keep the category itself — genre is vod_class
+        // when present (genre tags, not the category).
+        v.typeName = j.optString("type_name");
         v.actor = j.optString("vod_actor");
         v.director = j.optString("vod_director");
         v.description =
@@ -1351,6 +1366,8 @@ public final class Cms {
         if (v.remarks.isEmpty()) v.remarks = xmlTagValue(block, "vod_remarks");
         v.action = "";
         v.tag = xmlTagValue(block, "type");
+        // 2.0.61 (h)(j): the XML <type> tag IS the category name.
+        v.typeName = v.tag;
         v.genre = xmlTagValue(block, "vod_class");
         if (v.genre.isEmpty()) v.genre = v.tag;
         v.year = xmlTagValue(block, "year");

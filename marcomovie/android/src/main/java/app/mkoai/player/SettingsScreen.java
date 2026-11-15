@@ -124,6 +124,31 @@ final class SettingsScreen {
         link("軟體更新", "", "settings-updates", () -> open(() -> new UpdateScreen(a).show()));
     }
 
+    /**
+     * mkoai 2.0.61: the link keys of the 帳號同步 page, in display order.
+     * Pure logic (no Android) so a JVM test can prove the phone always
+     * offers 掃碼登入電視 — including when already signed in. The user
+     * missed it because his 2.0.56 build predates the 2.0.54 QR feature;
+     * this build (good tree) renders it. The phone QR link is deliberately
+     * OUTSIDE the signed-in / signed-out branch: the phone must be signed
+     * in to scan, so it belongs on the signed-in page too.
+     */
+    static java.util.List<String> accountSyncLinkKeys(boolean signedIn, boolean isTv) {
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        if (signedIn) {
+            keys.add("sync-now");
+            keys.add("sync-signout");
+        } else {
+            keys.add("sync-signin");
+            if (isTv) {
+                keys.add("sync-password");
+                keys.add("sync-qr-login");
+            }
+        }
+        if (!isTv) keys.add("sync-qr-login-phone");
+        return keys;
+    }
+
     /** mkoai account sync: Google sign-in, sync now, sign out. */
     void accountSync() {
         boolean signedIn = SupabaseAuth.isSignedIn(a);
@@ -137,52 +162,65 @@ final class SettingsScreen {
         if (signedIn) {
             a.paragraph("已登入：" + SupabaseAuth.email(a));
             a.paragraph("上次同步：" + SupabaseSync.lastSyncText(a));
-            link(
-                    "立即同步",
-                    "下載雲端紀錄並上傳本機紀錄",
-                    "sync-now",
-                    () -> SupabaseSync.syncNow(a));
-            link(
-                    "登出帳號",
-                    "登出後不再同步，本機紀錄保留",
-                    "sync-signout",
-                    () -> {
-                        SupabaseAuth.signOut(a);
-                        a.toast("已登出");
-                        show();
-                    });
-        } else {
-            link(
-                    "使用 Google 登入",
-                    "會開啟瀏覽器完成 Google 登入",
-                    "sync-signin",
-                    () -> SupabaseAuth.signInWithGoogle(a));
-            // 2.0.53: TV-only email + password sign-in (Google needs a
-            // browser on the TV, which many boxes don't have).
-            if (a.isTvDevice()) {
-                link(
-                        "用帳號密碼登入",
-                        "用 Email 與密碼登入帳號",
-                        "sync-password",
-                        () -> open(this::passwordSignIn));
-                // 2.0.54: TV QR login (TV shows a QR; the phone scans it and
-                // the TV signs in as the phone's account). No browser, no
-                // password typing on the TV.
-                link(
-                        "掃碼登入",
-                        "用手機 mkoai 掃電視的 QR 碼，電視直接登入手機同一個帳號",
-                        "sync-qr-login",
-                        () -> a.tvLoginDialog());
-            }
         }
-        // 2.0.54: phone scans the TV's login QR so the TV signs in as this
-        // phone's account (phone only; the phone must be signed in first).
-        if (!a.isTvDevice()) {
-            link(
-                    "掃碼登入電視",
-                    "掃電視的 QR 碼，讓電視登入手機同一個帳號",
-                    "sync-qr-login-phone",
-                    () -> new PhoneLoginDialog(a).show());
+        for (String key : accountSyncLinkKeys(signedIn, a.isTvDevice())) {
+            switch (key) {
+                case "sync-now":
+                    link(
+                            "立即同步",
+                            "下載雲端紀錄並上傳本機紀錄",
+                            "sync-now",
+                            () -> SupabaseSync.syncNow(a));
+                    break;
+                case "sync-signout":
+                    link(
+                            "登出帳號",
+                            "登出後不再同步，本機紀錄保留",
+                            "sync-signout",
+                            () -> {
+                                SupabaseAuth.signOut(a);
+                                a.toast("已登出");
+                                show();
+                            });
+                    break;
+                case "sync-signin":
+                    link(
+                            "使用 Google 登入",
+                            "會開啟瀏覽器完成 Google 登入",
+                            "sync-signin",
+                            () -> SupabaseAuth.signInWithGoogle(a));
+                    break;
+                case "sync-password":
+                    // 2.0.53: TV-only email + password sign-in (Google needs a
+                    // browser on the TV, which many boxes don't have).
+                    link(
+                            "用帳號密碼登入",
+                            "用 Email 與密碼登入帳號",
+                            "sync-password",
+                            () -> open(this::passwordSignIn));
+                    break;
+                case "sync-qr-login":
+                    // 2.0.54: TV QR login (TV shows a QR; the phone scans it and
+                    // the TV signs in as the phone's account). No browser, no
+                    // password typing on the TV.
+                    link(
+                            "掃碼登入",
+                            "用手機 mkoai 掃電視的 QR 碼，電視直接登入手機同一個帳號",
+                            "sync-qr-login",
+                            () -> a.tvLoginDialog());
+                    break;
+                case "sync-qr-login-phone":
+                    // 2.0.54: phone scans the TV's login QR so the TV signs in as this
+                    // phone's account (phone only; the phone must be signed in first).
+                    link(
+                            "掃碼登入電視",
+                            "掃電視的 QR 碼，讓電視登入手機同一個帳號",
+                            "sync-qr-login-phone",
+                            () -> new PhoneLoginDialog(a).show());
+                    break;
+                default:
+                    break;
+            }
         }
     }
 
@@ -845,8 +883,8 @@ final class SettingsScreen {
         ints(
                 "畫面比例",
                 Prefs.ASPECT,
-                new String[] {"適應", "鋪滿", "16:9", "4:3", "裁切填充"},
-                new int[] {0, 1, 2, 3, 4},
+                new String[] {"適應", "鋪滿", "16:9", "4:3", "裁切填充", "上下填滿", "左右填滿"},
+                new int[] {0, 1, 2, 3, 4, 5, 6},
                 0);
         ints(
                 "網路緩衝",

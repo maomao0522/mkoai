@@ -528,6 +528,14 @@ final class UpdateScreen {
                 .show();
     }
 
+    /**
+     * mkoai 2.0.61 (d): set before leaving for the system permission
+     * settings, so the return path (resumeAfterPermission) can restore
+     * this update screen even if the activity was destroyed while the
+     * user was in settings. Cleared when the return is handled.
+     */
+    static final String PERMISSION_RETURN_KEY = "update_permission_return";
+
     void install() {
         if (updates.busy) {
             a.toast("請等待當前任務完成");
@@ -545,25 +553,78 @@ final class UpdateScreen {
                     .setPositiveButton(
                             "開啟授權頁面",
                             (d, n) -> {
+                                // mkoai 2.0.61 (d): remember we left for
+                                // the permission settings before leaving,
+                                // so coming back restores this page.
+                                a.prefs
+                                        .edit()
+                                        .putBoolean(PERMISSION_RETURN_KEY, true)
+                                        .apply();
                                 try {
                                     a.startActivity(
                                             new Intent(
                                                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                                                     Uri.parse("package:" + a.getPackageName())));
                                 } catch (RuntimeException e) {
+                                    a.prefs.edit().remove(PERMISSION_RETURN_KEY).apply();
                                     a.notice("當前裝置未提供授權頁面，請從設定中開啟未知來源安裝許可權。");
                                 }
                             })
                     .setNegativeButton("稍後", null)
+                    .focusPositiveButton() // mkoai 2.0.61 (c): TV focus on 開啟授權頁面
                     .show();
             return;
         }
+        showInstallConfirm();
+    }
+
+    /** The 「安裝 <version>？」 confirm — shared by install() and the return path. */
+    void showInstallConfirm() {
         new AppDialog.Builder(a)
                 .setTitle("安裝 " + updates.available.version + "？")
                 .setMessage("將開啟系統的安裝確認頁面。覆蓋升級保留配置、收藏和觀看記錄。")
                 .setPositiveButton("繼續安裝", (d, n) -> prepareInstall())
                 .setNegativeButton("稍後", null)
+                .focusPositiveButton() // mkoai 2.0.61 (c): TV focus on 繼續安裝
                 .show();
+    }
+
+    /**
+     * mkoai 2.0.61 (d): called from MainActivity.onResume() when the user
+     * comes back from the system permission settings. Restores this update
+     * screen and, if the permission is now granted and the update is still
+     * downloaded and verified, offers the install confirm right away — one
+     * OK press installs. If the permission is still missing, the user just
+     * lands back on this page and can tap install again (no dialog forced).
+     * Posted to the UI queue: on a recreated activity the initial home is
+     * opened by an onCreate-posted runnable, and this post (enqueued in
+     * onResume, after it) runs after the home — a direct call here would
+     * be overwritten by the home open. Why the screen can be lost at all:
+     * the MainActivity screen stack is in-memory only and onCreate always
+     * starts at home, so a TV box that kills the backgrounded activity
+     * while the user is in system settings restarts the app at home.
+     */
+    static void resumeAfterPermission(MainActivity a) {
+        if (!a.prefs.getBoolean(PERMISSION_RETURN_KEY, false)) return;
+        a.prefs.edit().remove(PERMISSION_RETURN_KEY).apply();
+        a.ui.post(
+                () -> {
+                    if (a.isFinishing() || a.isDestroyed()) return;
+                    UpdateScreen screen = a.updateScreen;
+                    boolean showing =
+                            screen != null
+                                    && screen.status != null
+                                    && screen.status.isAttachedToWindow();
+                    if (!showing) {
+                        screen = new UpdateScreen(a);
+                        a.open(new MainActivity.Screen(screen::show), true);
+                    }
+                    if (Build.VERSION.SDK_INT >= 26
+                            && a.getPackageManager().canRequestPackageInstalls()
+                            && screen.updates.ready()) {
+                        screen.showInstallConfirm();
+                    }
+                });
     }
 
     static Intent installIntent() {
@@ -626,10 +687,27 @@ final class UpdateScreen {
                 });
     }
 
-    static void result(MainActivity a) {
+    /** mkoai 2.0.61 (e): the installer reports a successful install only as RESULT_OK. */
+    static boolean installSucceeded(int result) {
+        return result == android.app.Activity.RESULT_OK;
+    }
+
+    static void result(MainActivity a, int result) {
         UpdateManager updates = UpdateManager.get(a);
         updates.prefs.edit().remove("pending_code").apply();
-        updates.message = "已返回應用；若取消安裝，原版本繼續保留";
+        if (installSucceeded(result)) {
+            // mkoai 2.0.61 (e): the installer confirmed the install — the
+            // downloaded APK is no longer needed, delete it now (covers
+            // the case where this old process survives long enough to get
+            // the result; if the process was killed instead, the
+            // UpdateManager constructor deletes it on the next launch).
+            updates.deleteDownloadedApk();
+            updates.message = "已安裝新版，安裝包已自動刪除";
+        } else {
+            // Cancelled / failed: keep the APK so the user can retry the
+            // install without re-downloading.
+            updates.message = "已返回應用；若取消安裝，原版本繼續保留";
+        }
         if (a.updateScreen != null) a.updateScreen.refresh();
     }
 }

@@ -684,6 +684,7 @@ final class TmdbClient {
         v.year = it.year == null ? "" : it.year;
         v.tag = "tmdb";
         v.description = it.overview == null ? "" : it.overview;
+        v.mediaType = it.type == null ? "" : it.type; // mkoai 2.0.61: "movie" | "tv"
         v.area = "";
         v.genre = "";
         return v;

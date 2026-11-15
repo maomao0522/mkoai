@@ -250,7 +250,7 @@ final class MobileShell {
         }
         if (tmdbRowsLoading) {
             homeStatusTextRef.setVisibility(View.VISIBLE);
-            homeStatusTextRef.setText("正在載入推薦…");
+            homeStatusTextRef.setText("正在加载推荐…");
             return;
         }
         if (hasVisibleTmdbRows()) {
@@ -260,8 +260,8 @@ final class MobileShell {
         homeStatusTextRef.setVisibility(View.VISIBLE);
         homeStatusTextRef.setText(
                 selectedFilters.isEmpty()
-                        ? "當前分類暫無影片"
-                        : "當前篩選暫無匹配，可繼續載入更多影片");
+                        ? "当前分类暂无影片"
+                        : "当前筛选暂无匹配，可继续加载更多影片");
     }
 
     // 2.0.41: live TMDB list page — the open list page reads the live
@@ -304,38 +304,14 @@ final class MobileShell {
         }
     }
 
-    /**
-     * mkoai 2.0.38: TMDB home rows in Terminus+ order. kind/extra feed
-     * TmdbClient.list(); "latest" merges now_playing + airing_today,
-     * "top_rated" merges movie+tv top rated, "documentary" merges
-     * movie+tv genre 99. Short dramas / 兒童中文 / 兒童英語 have no
-     * clean TMDB mapping and are intentionally skipped.
-     */
-    private static final String[][] TMDB_ROW_DEFS = {
-        {"熱門電影", "trending_movie", ""},
-        {"熱門劇集", "trending_tv", ""},
-        {"最新上架", "latest", ""},
-        {"Netflix 新片", "discover_tv", "with_networks=213&sort_by=first_air_date.desc&first_air_date.lte=" + new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date())},
-        {"兒童中文", "discover_tv", "with_genres=10762&with_original_language=zh"},
-        {"兒童英語", "discover_tv", "with_genres=10762&with_original_language=en"},
-        {"高分佳作", "top_rated", ""},
-        {"動畫電影", "discover_movie", "with_genres=16"},
-        {"動作電影", "discover_movie", "with_genres=28"},
-        {"國語電影", "discover_movie", "with_original_language=zh"},
-        {"國漫", "discover_tv", "with_genres=16&with_original_language=zh"},
-        {"日漫", "discover_tv", "with_genres=16&with_original_language=ja"},
-        {"國產劇", "discover_tv", "with_original_language=zh"},
-        {"港台劇", "discover_tv", "with_origin_country=HK,TW"},
-        {"美劇", "discover_tv", "with_origin_country=US"},
-        {"日劇", "discover_tv", "with_origin_country=JP"},
-        {"韓劇", "discover_tv", "with_origin_country=KR"},
-        {"英劇", "discover_tv", "with_origin_country=GB"},
-        {"綜藝", "discover_tv", "with_genres=10764"},
-        {"紀錄片", "documentary", ""},
-        {"兒童電影", "discover_movie", "with_genres=16,10751"},
-        {"全部電影", "discover_movie", ""},
-        {"全部劇集", "discover_tv", ""},
-    };
+    // mkoai 2.0.61: TMDB home row definitions moved to HomeRows2061
+    // (Simplified labels, reference-app order, movies → dramas →
+    // variety). kind/extra feed TmdbClient.list(); "latest" merges
+    // now_playing + airing_today, "top_rated" merges movie+tv top
+    // rated, "documentary" merges movie+tv genre 99. The "douban_top"
+    // kind is fetched from DoubanHome, not TmdbClient (see the
+    // metadata-job loop below).
+    private static final String[][] TMDB_ROW_DEFS = HomeRows2061.TMDB_ROW_DEFS;
 
     private static final int TMDB_ROW_MAX_ITEMS = 20;
     private static final int TMDB_ROW_SHOW_ITEMS = 12;
@@ -1071,6 +1047,17 @@ final class MobileShell {
         sitePill.setGravity(Gravity.CENTER);
         sitePill.setPadding(a.dp(11), a.dp(7), a.dp(11), a.dp(7));
         a.glass(sitePill, 999);
+        // mkoai 2.0.61: green ▶ prefix (reference app top pill). The ▶
+        // span is applied after a.text() creates the view — a.text takes
+        // a plain String, so styled text is set here.
+        android.text.SpannableString pillText =
+                new android.text.SpannableString("▶ " + siteLabel);
+        pillText.setSpan(
+                new android.text.style.ForegroundColorSpan(0xff4ade80),
+                0,
+                1,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sitePill.setText(pillText);
         MobileDetailScreen.bindTouchFeedback(sitePill);
         sitePill.setOnClickListener(
                 v -> {
@@ -1093,6 +1080,21 @@ final class MobileShell {
                 searchGlyph, new FrameLayout.LayoutParams(a.dp(17), a.dp(17), Gravity.CENTER));
         searchCircle.setContentDescription("搜尋影片");
         bar.addView(searchCircle, new LinearLayout.LayoutParams(a.dp(48), a.dp(48)));
+
+        // mkoai 2.0.61: "⋯" menu circle (reference app top bar) — opens
+        // Settings for now (no new menu UI in this first try).
+        FrameLayout moreCircle = new FrameLayout(a);
+        moreCircle.setTag("nav-more");
+        moreCircle.setContentDescription("更多");
+        a.glass(moreCircle, 999);
+        MobileDetailScreen.bindTouchFeedback(moreCircle);
+        moreCircle.setOnClickListener(v -> switchTab(4));
+        TextView moreGlyph = a.text("⋯", 17, 0xfff3f4f6);
+        moreGlyph.setGravity(Gravity.CENTER);
+        moreCircle.addView(moreGlyph, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        LinearLayout.LayoutParams moreLp = new LinearLayout.LayoutParams(a.dp(48), a.dp(48));
+        moreLp.leftMargin = a.dp(6);
+        bar.addView(moreCircle, moreLp);
 
         // mkoai 2.0.38: history entry, next to search. Opens the full
         // 觀看歷史 page (same WATCH_HISTORY the home row reads).
@@ -1352,7 +1354,7 @@ final class MobileShell {
         }
 
         final Runnable[] triggerPullRefresh = new Runnable[1];
-        final TextView pullRefreshBadge = a.text("↓ 下拉重新整理當前內容", 12.5f, MainActivity.WHITE);
+        final TextView pullRefreshBadge = a.text("↓ 下拉重新整理当前内容", 12.5f, MainActivity.WHITE);
         pullRefreshBadge.setTypeface(null, Typeface.BOLD);
         pullRefreshBadge.setGravity(Gravity.CENTER);
         pullRefreshBadge.setPadding(a.dp(16), a.dp(8), a.dp(16), a.dp(8));
@@ -1412,8 +1414,8 @@ final class MobileShell {
                                             Math.min(1f, currentPullOffset / pullThreshold));
                                     pullRefreshBadge.setText(
                                             currentPullOffset >= pullThreshold
-                                                    ? "↑ 鬆開重新整理當前內容"
-                                                    : "↓ 下拉重新整理當前內容");
+                                                    ? "↑ 松开重新整理当前内容"
+                                                    : "↓ 下拉重新整理当前内容");
                                     return true;
                                 }
                             }
@@ -1443,6 +1445,12 @@ final class MobileShell {
                     }
                 };
         homeScroll = scrollView;
+        // mkoai 2.0.61: muted blue-grey home background (reference app) —
+        // home-only (this ScrollView belongs to the home tab) and skipped
+        // when the user has a custom wallpaper (the wallpaper stays visible).
+        if (!a.prefs.getBoolean(Prefs.WALLPAPER_ENABLED, false)) {
+            scrollView.setBackgroundColor(HomeRows2061.HOME_SLATE_BG);
+        }
         scrollView.post(() -> scrollView.scrollTo(0, homeScrollY));
         scrollView.setFillViewport(true);
         scrollView.setVerticalScrollBarEnabled(false);
@@ -1469,6 +1477,15 @@ final class MobileShell {
         heroContainer.setVisibility(View.GONE);
         body.addView(heroContainer, new LinearLayout.LayoutParams(-1, -2));
 
+        // mkoai 2.0.61: 继续观看 gets its own container directly under
+        // the hero (before 我的媒体）, so it renders even while the
+        // awwrated sections below are still loading. Filled in by
+        // renderContinueWatchingRow at the renderHomeSections call sites.
+        final LinearLayout continueWatchingContainer = a.vertical();
+        continueWatchingContainer.setTag("home-continue-watching");
+        continueWatchingContainer.setPadding(a.dp(16), a.dp(2), a.dp(16), 0);
+        body.addView(continueWatchingContainer, new LinearLayout.LayoutParams(-1, -2));
+
         // mkoai 2.0.38 (Emby style): "我的媒體" entry cards （熱門電影 /
         // 熱門劇集） sit right under the hero. Filled in by renderTmdbRows
         // once the TMDB trending lists load.
@@ -1478,7 +1495,7 @@ final class MobileShell {
         body.addView(mediaCardsContainer, new LinearLayout.LayoutParams(-1, -2));
 
         // 3. Status & 3-Column Poster Grid Container
-        final TextView statusText = a.text("正在載入片單…", 13, MainActivity.MUTED);
+        final TextView statusText = a.text("正在加载片单…", 13, MainActivity.MUTED);
         statusText.setGravity(Gravity.CENTER);
         statusText.setPadding(a.dp(16), a.dp(24), a.dp(16), a.dp(24));
         body.addView(statusText, new LinearLayout.LayoutParams(-1, -2));
@@ -1504,7 +1521,7 @@ final class MobileShell {
         tmdbRowsTicket = -1;
         tmdbRowsLoading = false;
 
-        final TextView loadMoreBtn = a.text("載入更多影片", 13.5f, MainActivity.WHITE);
+        final TextView loadMoreBtn = a.text("加载更多影片", 13.5f, MainActivity.WHITE);
         loadMoreBtn.setTag("home-load-more");
         loadMoreBtn.setTypeface(null, Typeface.BOLD);
         loadMoreBtn.setGravity(Gravity.CENTER);
@@ -1522,15 +1539,19 @@ final class MobileShell {
         final int[] completedPage = {0};
         resumeHome =
                 () -> {
+                    // 2.0.61 (h): the hero is a 推薦 pick too — only a movie
+                    // or drama/series may headline it.
+                    java.util.List<Cms.Video> heroVideos =
+                            VideoKind2061.filterRecommendations(currentVideos);
                     boolean showHero =
                             !SourceController.isConfigOrNetdiskSite(currentSite)
                                     && a.prefs.getBoolean(Prefs.SHOW_HERO_BANNER, true)
                                     && selectedCategoryId.isEmpty()
-                                    && !currentVideos.isEmpty();
+                                    && !heroVideos.isEmpty();
                     if (showHero) {
                         if (heroContainer.getChildCount() == 0) {
                             heroContainer.addView(
-                                    buildHeroCarousel(currentSite, currentVideos));
+                                    buildHeroCarousel(currentSite, heroVideos));
                         }
                         heroContainer.setVisibility(View.VISIBLE);
                     } else {
@@ -1542,7 +1563,7 @@ final class MobileShell {
                     pageFailed[0] = false;
                     currentPage = Math.max(1, completedPage[0]);
                     loadMoreBtn.setVisibility(currentPage < totalPages ? View.VISIBLE : View.GONE);
-                    loadMoreBtn.setText("載入更多影片 (" + currentPage + "/" + totalPages + ")");
+                    loadMoreBtn.setText("加载更多影片 (" + currentPage + "/" + totalPages + ")");
                 };
         final Runnable[] fetchCategoryPage = new Runnable[1];
         reloadCategory =
@@ -1590,11 +1611,11 @@ final class MobileShell {
                             heroContainer.setVisibility(View.GONE);
                         }
                         statusText.setVisibility(View.VISIBLE);
-                        statusText.setText("正在載入…");
+                        statusText.setText("正在加载…");
                         loadMoreBtn.setVisibility(View.GONE);
                     } else {
                         loadMoreBtn.setVisibility(View.VISIBLE);
-                        loadMoreBtn.setText("正在載入更多…");
+                        loadMoreBtn.setText("正在加载更多…");
                     }
                     final Cms.Site siteSnapshot = currentSite;
                     final String catSnapshot = selectedCategoryId;
@@ -1869,19 +1890,24 @@ final class MobileShell {
                                                     if (currentVideos.isEmpty()) {
                                                         statusText.setText(
                                                                 selectedFilters.isEmpty()
-                                                                        ? "當前分類暫無影片"
-                                                                        : "當前篩選暫無匹配，可繼續載入更多影片");
+                                                                        ? "当前分类暂无影片"
+                                                                        : "当前筛选暂无匹配，可继续加载更多影片");
                                                     }
                                                 }
                                                 // Render Featured Hero Showcase on Recommend tab
+                                                // 2.0.61 (h): only a movie or drama/series
+                                                // may headline the hero.
+                                                java.util.List<Cms.Video> heroVideos =
+                                                        VideoKind2061.filterRecommendations(
+                                                                currentVideos);
                                                 if (!configOrNetdisk
                                                         && a.prefs.getBoolean(
                                                                 Prefs.SHOW_HERO_BANNER, true)
                                                         && catSnapshot.isEmpty()
-                                                        && !currentVideos.isEmpty()) {
+                                                        && !heroVideos.isEmpty()) {
                                                     heroContainer.removeAllViews();
                                                     heroContainer.addView(
-                                                            buildHeroCarousel(siteSnapshot, currentVideos));
+                                                            buildHeroCarousel(siteSnapshot, heroVideos));
                                                     heroContainer.setVisibility(View.VISIBLE);
                                                 } else {
                                                     heroContainer.removeAllViews();
@@ -1897,6 +1923,9 @@ final class MobileShell {
                                                             gridContainer,
                                                             siteSnapshot,
                                                             currentVideos);
+                                                    renderContinueWatchingRow(
+                                                            continueWatchingContainer,
+                                                            siteSnapshot);
                                                 } else {
                                                     renderVideoGrid(
                                                             gridContainer, siteSnapshot, currentVideos);
@@ -1917,7 +1946,7 @@ final class MobileShell {
                                                 if (currentPage < totalPages) {
                                                     loadMoreBtn.setVisibility(View.VISIBLE);
                                                     loadMoreBtn.setText(
-                                                            "載入更多影片 ("
+                                                            "加载更多影片 ("
                                                                     + currentPage
                                                                     + "/"
                                                                     + totalPages
@@ -2063,17 +2092,25 @@ final class MobileShell {
                                                                             SourceController
                                                                                     .isConfigOrNetdiskSite(
                                                                                             siteSnapshot);
+                                                                    // 2.0.61 (h): only a movie or
+                                                                    // drama/series may headline
+                                                                    // the hero.
+                                                                    java.util.List<Cms.Video>
+                                                                            heroVideos =
+                                                                            VideoKind2061
+                                                                                    .filterRecommendations(
+                                                                                            currentVideos);
                                                                     if (!configOrNetdisk
                                                                             && a.prefs.getBoolean(
                                                                                     Prefs
                                                                                             .SHOW_HERO_BANNER,
                                                                                     true)
-                                                                            && !currentVideos
+                                                                            && !heroVideos
                                                                                     .isEmpty()) {
                                                                         heroContainer
                                                                                 .removeAllViews();
                                                                         heroContainer.addView(
-                                                                                buildHeroCarousel(siteSnapshot, currentVideos));
+                                                                                buildHeroCarousel(siteSnapshot, heroVideos));
                                                                         heroContainer
                                                                                 .setVisibility(
                                                                                         View.VISIBLE);
@@ -2088,6 +2125,9 @@ final class MobileShell {
                                                                             gridContainer,
                                                                             siteSnapshot,
                                                                             currentVideos);
+                                                                    renderContinueWatchingRow(
+                                                                            continueWatchingContainer,
+                                                                            siteSnapshot);
                                                                     // mkoai 2.0.51: titles
                                                                     // landed — the loading
                                                                     // line (if any) goes away.
@@ -2274,11 +2314,17 @@ final class MobileShell {
         title.setMaxLines(2);
         title.setEllipsize(TextUtils.TruncateAt.END);
         content.addView(title, new LinearLayout.LayoutParams(-1, -2));
-        String meta = (featured.year == null ? "" : featured.year)
-                + (featured.remarks == null || featured.remarks.isEmpty() ? "" : " · " + featured.remarks);
+        // mkoai 2.0.61: hero meta is the year only when present, else
+        // the remarks (reference app: title + year + description, no
+        // second line). Hidden when neither exists.
+        String meta =
+                (featured.year != null && !featured.year.trim().isEmpty())
+                        ? featured.year.trim()
+                        : (featured.remarks == null ? "" : featured.remarks);
         TextView year = a.text(meta, 14, 0xffeeeeee);
         year.setGravity(Gravity.CENTER);
         year.setPadding(0, a.dp(9), 0, a.dp(12));
+        if (meta.isEmpty()) year.setVisibility(View.GONE);
         content.addView(year);
         if (featured.description != null && !featured.description.trim().isEmpty()) {
             TextView summary = a.text(featured.description.replaceAll("<[^>]*>", " "), 14, 0xffeeeeee);
@@ -2288,15 +2334,8 @@ final class MobileShell {
             summary.setLineSpacing(a.dp(3), 1f);
             content.addView(summary, new LinearLayout.LayoutParams(-1, -2));
         }
-        TextView play = a.text("▶ 播放", 17, 0xff111111);
-        play.setTypeface(null, Typeface.BOLD);
-        play.setGravity(Gravity.CENTER);
-        play.setBackground(a.bg(0xfff5f5f5, 999));
-        LinearLayout.LayoutParams button = new LinearLayout.LayoutParams(-1, a.dp(48));
-        button.topMargin = a.dp(16);
-        content.addView(play, button);
-        MobileDetailScreen.bindTouchFeedback(play);
-        play.setOnClickListener(v -> a.openHomeCard(site, featured));
+        // mkoai 2.0.61: no ▶ 播放 button on the hero (the reference app
+        // has none) — tapping the card still opens the detail page.
         card.addView(content, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         card.setOnClickListener(v -> a.openHomeCard(site, featured));
         return card;
@@ -2363,13 +2402,19 @@ final class MobileShell {
     private void renderHomeSections(
             LinearLayout container, Cms.Site site, List<Cms.Video> videos) {
         container.removeAllViews();
+        // mkoai 2.0.61 (h): the phone 推薦 sections show only movies and
+        // dramas/series — variety, documentaries and kids titles are
+        // dropped here, at the one place all recommendation sections are
+        // built from. Category pages (renderVideoGrid) and search are
+        // untouched: they take their own list, not this one.
+        videos = VideoKind2061.filterRecommendations(videos);
         // mkoai 2.0.51: never show the "no recommendations" copy while
         // the TMDB checks are still running or their rows are visible —
         // the rows below are still filling in (or already showing
         // fail-open titles). The copy appears only when the home is
         // genuinely empty everywhere.
         if (videos.isEmpty() && !tmdbRowsLoading && !hasVisibleTmdbRows()) {
-            TextView hint = a.text("目前沒有已確認片源收錄的推薦，可直接搜尋作品或重新整理。", 14, 0xffb8c2bd);
+            TextView hint = a.text("目前没有已确认片源收录的推荐，可直接搜索作品或重新整理。", 14, 0xffb8c2bd);
             hint.setPadding(0, a.dp(24), 0, a.dp(20));
             container.addView(hint);
         }
@@ -2388,10 +2433,9 @@ final class MobileShell {
         }
         int cardWidthDp = 128;
         int posterHeightDp = Math.round(cardWidthDp * 1.48f);
-        // mkoai 2.0.38: 繼續觀看 — the 10 most recent WATCH_HISTORY
-        // entries (the same list the history page reads). In-progress
-        // titles show a progress bar; finished ones show 已看完. Tap resumes.
-        renderContinueWatchingRow(container, site, cardWidthDp, posterHeightDp);
+        // mkoai 2.0.61: 继续观看 moved out of this method into its own
+        // container directly under the hero (see the renderHomeSections
+        // call sites) — it renders even while these sections load.
         // mkoai: Netflix-style Top 10 row — the first 10 home titles with
         // giant outlined numerals beside each poster. Hidden when empty.
         if (!videos.isEmpty()) {
@@ -2467,7 +2511,7 @@ final class MobileShell {
             String title = e.getKey();
             // mkoai 2.0.26: home is awwrated only, so the only section is
             // awwrated. (Douban/Simkl mappings removed with their home modes.)
-            if ("awwrated".equals(title)) title = "awwrated 推薦";
+            if ("awwrated".equals(title)) title = "awwrated 推荐";
             else title = ChineseConvert.s2t(title);
             // mkoai: section titles stay as the source serves them
             // (Simplified) — do not s2t (see 2.0.18 garbled names).
@@ -2494,15 +2538,25 @@ final class MobileShell {
         }
     }
 
-    /** mkoai 2.0.38: 繼續觀看 row — the 10 most recent WATCH_HISTORY entries. */
-    private void renderContinueWatchingRow(
-            LinearLayout container, Cms.Site site, int cardWidthDp, int posterHeightDp) {
+    /**
+     * mkoai 2.0.38: 继续观看 row — the 10 most recent WATCH_HISTORY entries.
+     * mkoai 2.0.61: renders into its own container directly under the hero
+     * (called from the renderHomeSections call sites, not from
+     * renderHomeSections itself), so it shows even while the awwrated
+     * sections below are still loading. Clears the container first: it no
+     * longer relies on the caller to clear it.
+     */
+    private void renderContinueWatchingRow(LinearLayout container, Cms.Site site) {
+        if (container == null) return;
+        container.removeAllViews();
+        int cardWidthDp = 128;
+        int posterHeightDp = Math.round(cardWidthDp * 1.48f);
         // 2.0.41: display-only dedupe — the same show+episode watched via
         // different sources/ids shows once (latest update wins).
         List<WatchHistory.Entry> items = WatchHistory.deduped(a.watchHistory());
         if (items == null || items.isEmpty()) return;
         int shown = Math.min(10, items.size());
-        TextView title = a.text("繼續觀看", 16, MainActivity.WHITE);
+        TextView title = a.text("继续观看", 16, MainActivity.WHITE);
         title.setTypeface(null, Typeface.BOLD);
         title.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
         title.setPadding(0, a.dp(14), 0, a.dp(8));
@@ -2644,11 +2698,12 @@ final class MobileShell {
             // so a card's remembered source is a priority one when it has
             // the title. The current source still goes first (the user is
             // already browsing it); youth mode still skips 大地 entirely.
-            for (String api : SourcePreferences.PRIORITY_SOURCE_APIS) {
+            // 2.0.61 (k): the priority list is 巨量, 360, 魔都動漫, xgzy.
+            for (String host : SourcePreferences.PRIORITY_SOURCE_HOSTS) {
                 for (Cms.Site s : a.config.sites) {
                     if (s == null
                             || s.api == null
-                            || !api.equals(s.api)
+                            || !SourcePreferences.apiMatchesHost(s.api, host)
                             || seenApi.contains(s.api)) {
                         continue;
                     }
@@ -2708,7 +2763,17 @@ final class MobileShell {
                             rows.add(new TmdbRow(def[0], def[1], def[2]));
                         }
                         List<java.util.concurrent.Callable<List<TmdbClient.Item>>> metadataJobs = new ArrayList<>();
-                        for (TmdbRow row : rows) metadataJobs.add(() -> TmdbClient.list(filesDir, row.kind, row.extra));
+                        for (TmdbRow row : rows) {
+                            // mkoai 2.0.61: 豆瓣高分 is fetched from Douban
+                            // (direct Douban; no Worker route for it yet) —
+                            // not a TmdbClient kind. A failed fetch yields
+                            // null (job cancelled/failed) and the row hides.
+                            if (HomeRows2061.isDoubanRow(row.kind))
+                                metadataJobs.add(() -> DoubanHome.fetchTopRatedItems());
+                            else
+                                metadataJobs.add(
+                                        () -> TmdbClient.list(filesDir, row.kind, row.extra));
+                        }
                         List<List<TmdbClient.Item>> metadata = BoundedBatch.run(metadataJobs, 4, 12000L);
                         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
                             TmdbRow row = rows.get(rowIndex);
@@ -2731,6 +2796,10 @@ final class MobileShell {
                                 // unparseable dates fail open (kept).
                                 if (!AwwratedHome.isOldEnoughDate(it.date)) continue;
                                 Cms.Video v = TmdbClient.toVideo(it);
+                                // mkoai 2.0.61: 豆瓣高分 cards come from
+                                // Douban, not TMDB — tag them so the
+                                // detail/search flow treats them as such.
+                                if (HomeRows2061.isDoubanRow(row.kind)) v.tag = "douban";
                                 if (v.title == null || v.title.isEmpty()) continue;
                                 AwwratedHome.CrossHit hit =
                                         AwwratedHome.cachedHitAny(disk, apiKeys, v.title, now);
@@ -3027,7 +3096,7 @@ final class MobileShell {
                 (hotMovie != null && !hotMovie.display().isEmpty())
                         || (hotTv != null && !hotTv.display().isEmpty());
         if (anyCard) {
-            TextView mediaTitle = a.text("我的媒體", 16, MainActivity.WHITE);
+            TextView mediaTitle = a.text("我的媒体", 16, MainActivity.WHITE);
             mediaTitle.setTypeface(null, Typeface.BOLD);
             mediaTitle.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
             mediaTitle.setPadding(0, a.dp(14), 0, a.dp(8));
@@ -3038,13 +3107,13 @@ final class MobileShell {
                 LinearLayout.LayoutParams lp =
                         new LinearLayout.LayoutParams(0, -2, 1f);
                 lp.rightMargin = a.dp(6);
-                cardsRow.addView(buildMediaCard(site, "熱門電影", "Hot Movies", hotMovie), lp);
+                cardsRow.addView(buildMediaCard(site, "热门电影", "Hot Movies", hotMovie), lp);
             }
             if (hotTv != null && !hotTv.display().isEmpty()) {
                 LinearLayout.LayoutParams lp =
                         new LinearLayout.LayoutParams(0, -2, 1f);
                 lp.leftMargin = a.dp(6);
-                cardsRow.addView(buildMediaCard(site, "熱門劇集", "Hot TV Series", hotTv), lp);
+                cardsRow.addView(buildMediaCard(site, "热门剧集", "Hot TV Series", hotTv), lp);
             }
             mediaCardsContainerRef.addView(cardsRow, new LinearLayout.LayoutParams(-1, -2));
         }
@@ -3142,7 +3211,7 @@ final class MobileShell {
         title.setTypeface(null, Typeface.BOLD);
         title.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView all = a.text("查看全部 ›", 13, 0xff8e959e);
+        TextView all = a.text("查看全部 >", 13, HomeRows2061.VIEW_ALL_COLOR);
         all.setPadding(a.dp(8), a.dp(4), a.dp(2), a.dp(4));
         MobileDetailScreen.bindTouchFeedback(all);
         all.setOnClickListener(view -> openTmdbList(site, row.title, row));
@@ -3449,8 +3518,11 @@ final class MobileShell {
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
         art.addView(img, new FrameLayout.LayoutParams(-1, -1));
         bindReliablePoster(img, v);
-        // 2.0.40: year bottom-left + remarks badge bottom-right.
-        addPosterOverlay(a, art, v.remarks, v.year);
+        // mkoai 2.0.61: the year moves off the poster (only the remarks
+        // badge stays on it) and under the title instead (reference app).
+        addPosterOverlay(a, art, v.remarks, null);
+        // 2.0.61 (j): 「電影」 / 「劇」 chip at the poster's top-left corner.
+        VideoKind2061.addTypeBadge(a, art, v);
         card.addView(art, new LinearLayout.LayoutParams(-1, a.dp(posterHeightDp)));
         TextView title = a.text(v.title, 13, 0xfff5f7fa);
         title.setTypeface(null, Typeface.BOLD);
@@ -3459,6 +3531,18 @@ final class MobileShell {
         title.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
         title.setPadding(a.dp(1), a.dp(7), a.dp(1), 0);
         card.addView(title);
+        // Year line under the title: "2026" or "2026 - 现在" for an
+        // airing TV show. Hidden when there is no year.
+        String yearLine =
+                HomeRows2061.yearLine(
+                        v, java.util.Calendar.getInstance().get(java.util.Calendar.YEAR));
+        if (!yearLine.isEmpty()) {
+            TextView year = a.text(yearLine, 11, HomeRows2061.YEAR_TEXT_COLOR);
+            year.setSingleLine(true);
+            year.setEllipsize(TextUtils.TruncateAt.END);
+            year.setPadding(a.dp(1), a.dp(2), a.dp(1), 0);
+            card.addView(year);
+        }
         return card;
     }
 
@@ -3538,9 +3622,10 @@ final class MobileShell {
                         // card build (2.0.47 poisoned it for the
                         // whole process).
                         String liveApi = sourceApi;
-                        if ((liveApi == null || liveApi.isEmpty())
-                                && SourcePreferences.PRIORITY_SOURCE_APIS.length > 0) {
-                            liveApi = SourcePreferences.PRIORITY_SOURCE_APIS[0];
+                        if ((liveApi == null || liveApi.isEmpty())) {
+                            // 2.0.61 (k): the first priority source's api
+                            // (巨量 when present in the config).
+                            liveApi = SourcePreferences.firstPriorityApi(a);
                         }
                         if (liveApi != null && !liveApi.isEmpty()) {
                             String missKey = liveApi + "\n" + title;

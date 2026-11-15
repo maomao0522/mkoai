@@ -1477,7 +1477,12 @@ final class PlaybackControls {
     void aspect() {
         // 2.0.41: mode 0 is plain 「自動」 = fit, never crops. Cropping is
         // only mode 4 （裁切填充）, picked explicitly by the user.
-        String[] labels = {"自動", "鋪滿螢幕", "16:9", "4:3", "裁切填充"};
+        // 2.0.61 (l): modes 5/6 fill one dimension only, aspect preserved:
+        // 上下填滿 fills the height (crops left/right when the video is
+        // wider than the screen), 左右填滿 fills the width (crops
+        // top/bottom when the video is taller). Appended after mode 4, so
+        // the existing indices 0-4 keep their meaning.
+        String[] labels = {"自動", "鋪滿螢幕", "16:9", "4:3", "裁切填充", "上下填滿", "左右填滿"};
         choose(
                 "畫面比例",
                 labels,
@@ -3307,25 +3312,48 @@ final class PlaybackControls {
         videoHeight = height;
         if (a.playerChrome != null) a.playerChrome.resolution(width, height);
         if (width <= 0 || height <= 0 || a.playbackLayer.getWidth() == 0) return;
-        int w = a.playbackLayer.getWidth(),
-                h = a.playbackLayer.getHeight(),
-                mode = a.prefs.getInt(Prefs.ASPECT, 0);
-        float ratio = mode == 2 ? 16f / 9 : mode == 3 ? 4f / 3 : (float) width / height;
+        // 2.0.61 (l): the size comes from surfaceSize — the same math the
+        // JVM test covers (modes 0-6), so the live path cannot drift from
+        // the tested behaviour.
+        int[] size =
+                surfaceSize(
+                        a.prefs.getInt(Prefs.ASPECT, 0),
+                        width,
+                        height,
+                        a.playbackLayer.getWidth(),
+                        a.playbackLayer.getHeight());
+        surface.setLayoutParams(
+                new FrameLayout.LayoutParams(size[0], size[1], Gravity.CENTER));
+    }
+
+    /**
+     * mkoai 2.0.61 (l): pure resize math — the surface size {w, h} for a
+     * video of (videoWidth, videoHeight) on a layer of (layerW, layerH)
+     * under an aspect mode. Same branches as {@link #resize(int, int)},
+     * so the JVM test covers the real behaviour. Modes: 0 自動 = fit
+     * (never crops), 1 鋪滿螢幕 = stretch to the layer, 2 16:9 / 3 4:3 =
+     * fit to that ratio, 4 裁切填充 = cover (crop one side), 5 上下填滿
+     * = height fills, 6 左右填滿 = width fills.
+     */
+    static int[] surfaceSize(
+            int mode, int videoWidth, int videoHeight, int layerW, int layerH) {
+        float ratio =
+                mode == 2
+                        ? 16f / 9
+                        : mode == 3 ? 4f / 3 : (float) videoWidth / videoHeight;
+        int w = layerW, h = layerH;
         if (mode != 1) {
-            // mkoai 2.0.41: mode 0 （自動） is FIT — scale to fit inside the
-            // screen without cropping anything (letterbox/pillarbox as
-            // needed), maximized within the screen. Cropping is ONLY for
-            // mode 4 （裁切填充）, which the user must pick explicitly.
-            // (2.0.36 made mode 0 zoom-to-fill like mode 4; that cropped
-            // the picture and cut subtitles, so mode 0 now uses the same
-            // fit branch as modes 2/3.)
             if (mode == 4) {
                 if ((float) w / h > ratio) h = Math.round(w / ratio);
                 else w = Math.round(h * ratio);
+            } else if (mode == 5) {
+                w = Math.round(h * ratio);
+            } else if (mode == 6) {
+                h = Math.round(w / ratio);
             } else if ((float) w / h > ratio) w = Math.round(h * ratio);
             else h = Math.round(w / ratio);
         }
-        surface.setLayoutParams(new FrameLayout.LayoutParams(w, h, Gravity.CENTER));
+        return new int[] {w, h};
     }
 
     void visible(boolean visible) {

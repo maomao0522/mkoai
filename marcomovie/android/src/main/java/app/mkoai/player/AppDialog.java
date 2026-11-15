@@ -169,9 +169,35 @@ final class AppDialog extends Dialog {
         if (a.isTvDevice()) {
             w.getDecorView().setSystemUiVisibility(5894);
             w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
-            View first = selected;
-            if (first == null)
-                first = content.getChildCount() > 0 ? content.getChildAt(0) : actions.get(-1);
+            // mkoai 2.0.61: initial TV focus. The old code focused the
+            // first content child — for a plain message dialog that is
+            // the message TextView itself (it is focusable), so OK did
+            // nothing until the user pressed DOWN. Now the target is
+            // chosen by tvFocusTarget(): a list selection first, then the
+            // first field of a form, then the safe (negative) button —
+            // unless this dialog opted into the positive button.
+            View first = null;
+            String target =
+                    tvFocusTarget(
+                            selected != null,
+                            spec.view != null,
+                            spec.focusPositive,
+                            actions.containsKey(-1),
+                            actions.containsKey(-2),
+                            actions.containsKey(-3));
+            if ("selected".equals(target)) first = selected;
+            else if ("view".equals(target)) first = firstFocusable(spec.view);
+            else if ("positive".equals(target)) first = actions.get(-1);
+            else if ("negative".equals(target)) first = actions.get(-2);
+            else if ("neutral".equals(target)) first = actions.get(-3);
+            else if (content.getChildCount() > 0) first = content.getChildAt(0);
+            if (first == null) {
+                // Form with no focusable field: fall back to the safe
+                // button, then the first content child.
+                if (actions.containsKey(-2)) first = actions.get(-2);
+                else if (actions.containsKey(-1)) first = actions.get(-1);
+                else if (content.getChildCount() > 0) first = content.getChildAt(0);
+            }
             if (first != null) first.requestFocus();
         } else {
             w.setSoftInputMode(
@@ -193,6 +219,48 @@ final class AppDialog extends Dialog {
         if (anchor != null && anchor.isAttachedToWindow()) anchor.requestFocus();
     }
 
+    /**
+     * mkoai 2.0.61: which view gets the initial TV focus in show(), as a
+     * pure choice (JVM-testable). Returns "selected" (checked list item),
+     * "view" (first field of a form), "positive" / "negative" / "neutral"
+     * (footer button), or "content" (first content child — only when the
+     * dialog has no list, no form and no buttons). The safe default for a
+     * plain message + buttons dialog is the NEGATIVE button: focusing a
+     * positive button by default would be wrong for destructive dialogs
+     * (e.g. 「清空」 / 「刪除」) — an accidental OK would delete things.
+     * A dialog whose positive action IS the reason the user opened it
+     * (the install dialogs) opts into "positive" via focusPositive.
+     */
+    static String tvFocusTarget(
+            boolean hasSelected,
+            boolean hasView,
+            boolean focusPositive,
+            boolean hasPositive,
+            boolean hasNegative,
+            boolean hasNeutral) {
+        if (hasSelected) return "selected";
+        if (hasView) return "view";
+        if (focusPositive && hasPositive) return "positive";
+        if (hasNegative) return "negative";
+        if (hasPositive) return "positive";
+        if (hasNeutral) return "neutral";
+        return "content";
+    }
+
+    /** First focusable view in this subtree (depth-first), or null. */
+    static View firstFocusable(View v) {
+        if (v == null || v.getVisibility() != View.VISIBLE) return null;
+        if (v.isFocusable()) return v;
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View f = firstFocusable(g.getChildAt(i));
+                if (f != null) return f;
+            }
+        }
+        return null;
+    }
+
     static final class Builder {
         final MainActivity a;
         boolean wrapChoices;
@@ -200,6 +268,9 @@ final class AppDialog extends Dialog {
         String[] labels;
         int selected = -1;
         View view;
+        // mkoai 2.0.61: initial TV focus goes to the positive button
+        // instead of the safe negative default (see focusPositiveButton).
+        boolean focusPositive;
         DialogInterface.OnClickListener pick;
         DialogInterface.OnCancelListener cancel;
         final Map<Integer, String> buttons = new HashMap<>();
@@ -249,6 +320,18 @@ final class AppDialog extends Dialog {
 
         Builder setPositiveButton(String value, DialogInterface.OnClickListener action) {
             return button(-1, value, action);
+        }
+
+        /**
+         * mkoai 2.0.61: opt this dialog's initial TV focus into the
+         * positive button (instead of the safe negative default). Use
+         * only when the positive action is the reason the user opened
+         * the dialog (e.g. the install permission / install confirm
+         * dialogs) — never for destructive positives.
+         */
+        Builder focusPositiveButton() {
+            focusPositive = true;
+            return this;
         }
 
         Builder setNegativeButton(String value, DialogInterface.OnClickListener action) {
