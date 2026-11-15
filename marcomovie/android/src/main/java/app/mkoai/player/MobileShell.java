@@ -443,6 +443,18 @@ final class MobileShell {
     private static MainActivity.Screen openListScreen;
     private static int openListShown = -1;
 
+    /**
+     * mkoai 2.0.67: the home tone the open TMDB list page was opened
+     * with — captured in openTmdbList at open time from the hero tone
+     * then showing (heroDiffusionShown), so the view-all page follows
+     * the home's current colour. A refresh while the page is open
+     * keeps this tone (it re-takes it on the next open); a hero
+     * rotation behind the page never re-tints it. DARK until the
+     * first capture — a wallpaper home has no tone to follow, so it
+     * keeps today's dark page.
+     */
+    private static int openListTone = MainActivity.DARK;
+
     /** One TMDB home row: its list kind, its confirmed titles, and titles still unchecked. */
     private static final class TmdbRow {
         final String title;
@@ -2751,8 +2763,13 @@ final class MobileShell {
             View hero = buildHeroShowcaseCard(site,heroList.get(i));
             pages.addView(hero,new LinearLayout.LayoutParams(pageWidth,-1));
         }
-        int height = Math.min(640,Math.max(420,(int)(pageWidth/a.getResources().getDisplayMetrics().density*1.25f)));
-        frame.addView(pager,new FrameLayout.LayoutParams(-1,a.dp(height)));
+        // mkoai 2.0.67: the pager height is HeroDiffusion2063.heroHeightDp —
+        // the same formula the hero cards and the bloom hold use, so the
+        // pager, the cards and the anchor can never drift apart.
+        float height =
+                HeroDiffusion2063.heroHeightDp(
+                        pageWidth / a.getResources().getDisplayMetrics().density);
+        frame.addView(pager, new FrameLayout.LayoutParams(-1, a.dp(height)));
         frame.addView(dots,new FrameLayout.LayoutParams(-1,a.dp(24),Gravity.BOTTOM));
         pager.getViewTreeObserver().addOnScrollChangedListener(() -> {
             int next = Math.max(0,Math.min(count-1,Math.round((float)pager.getScrollX()/pageWidth)));
@@ -2773,13 +2790,17 @@ final class MobileShell {
      * prefers the landscape backdrop (TMDB backdrop_path 16:9 — Emby's
      * hero is a backdrop too); with a backdrop the artwork is FIT_START
      * (a 16:9 strip at the top, the title block below it on the page
-     * tone). With only a portrait poster the artwork is FIT_CENTER —
-     * the whole 2:3 poster shows, centred, with the diffusion tone
-     * bleeding at the sides — never CENTER_CROP, which cut ~17% of the
-     * poster's height (the top "ALL'S FAIR" text in half, and the
-     * bottom too). The card's fixed height (the pager's) is unchanged;
-     * only the crop is gone. A backdrop that fails to load falls back
-     * to the poster (FIT_CENTER) through the same reliable path.
+     * tone). With only a portrait poster the artwork is CENTER_CROP —
+     * the poster fills the card edge to edge, like Emby's hero. mkoai
+     * 2.0.67: FIT_CENTER is gone — it left 32.75dp tone pillars on
+     * each side of the poster in the 393x491.25 box, so the hero never
+     * met the phone edges. CENTER_CROP cut ~17% of the poster's height
+     * in that box (the 2.0.65 complaint), but the 2.0.67 hero is
+     * 393x589.5 — the same 2:3 ratio as the poster — so the crop is
+     * ~0% (0.06% of the width in pixels on a POCO F5). The card's
+     * fixed height (the pager's) is unchanged; only the scale type
+     * changes. A backdrop that fails to load falls back to the poster
+     * (CENTER_CROP) through the same reliable path.
      */
     private void bindHeroArtwork(ImageView artwork, Cms.Video featured) {
         String backdrop = featured.backdrop;
@@ -2788,20 +2809,25 @@ final class MobileShell {
             artwork.setImageDrawable(new PosterPlaceholder(featured.title));
             artwork.setContentDescription(featured.title + " 封面");
             ImageLoader.onFailure(artwork, () -> {
-                artwork.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 bindReliablePoster(artwork, featured);
             });
             a.poster(backdrop, artwork);
             return;
         }
-        artwork.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         bindReliablePoster(artwork, featured);
     }
 
     private View buildHeroShowcaseCard(final Cms.Site site, final Cms.Video featured) {
         FrameLayout card = new FrameLayout(a);
         card.setTag("hero-watch-now-button");
-        int height = Math.min(640, Math.max(420, (int)(a.windowWidth() / a.getResources().getDisplayMetrics().density * 1.25f)));
+        // mkoai 2.0.67: the height comes from HeroDiffusion2063.heroHeightDp
+        // (the same formula the bloom hold uses) — one source of truth,
+        // so the card bottom and the bloom anchor can never drift apart.
+        float height =
+                HeroDiffusion2063.heroHeightDp(
+                        a.windowWidth() / a.getResources().getDisplayMetrics().density);
         card.setMinimumHeight(a.dp(height));
         // mkoai 2.0.63: the card sits on the diffusion colour, not a black
         // band — while the artwork is still loading the card already melts
@@ -2975,8 +3001,8 @@ final class MobileShell {
      * recorded on the Video (future builds use it directly) and the
      * artwork is swapped to it — but ONLY while the poster has not
      * decoded yet (the artwork still shows the placeholder); a decoded
-     * poster is never yanked mid-view, and it is already un-cropped
-     * (FIT_CENTER). The swap re-samples the tone under the backdrop key,
+     * poster is never yanked mid-view, and it is already effectively
+     * un-cropped (CENTER_CROP, ~0% crop at the 2.0.67 hero height). The swap re-samples the tone under the backdrop key,
      * and a cached TMDB vote reveals the ratings row. Runs once per
      * artwork key (heroBackdropResolved), never on every rotation.
      */
@@ -4278,6 +4304,13 @@ final class MobileShell {
                             openListRow = liveRow;
                             openListSite = site;
                             openListScreen = holder[0];
+                            // mkoai 2.0.67: capture the home tone NOW —
+                            // the list page opens with the colour the
+                            // home shows at this moment.
+                            openListTone =
+                                    a.prefs.getBoolean(Prefs.WALLPAPER_ENABLED, false)
+                                            ? MainActivity.DARK
+                                            : heroDiffusionShown;
                             showTmdbListPage(a, site, title, liveRow);
                         });
         a.open(holder[0], true);
@@ -4327,7 +4360,7 @@ final class MobileShell {
         }
         LinearLayout grid = (LinearLayout) gridView;
         grid.removeAllViews();
-        fillTmdbListGrid(a, openListSite, grid, now);
+        fillTmdbListGrid(a, openListSite, grid, now, openListTone);
         if (countView instanceof TextView) {
             // 2.0.51: pending-only rows are fail-open recommendations,
             // not source-confirmed titles — say so honestly.
@@ -4346,10 +4379,40 @@ final class MobileShell {
     private void showTmdbListPage(
             MainActivity a, Cms.Site site, String title, TmdbRow row) {
         a.renderPage(title, "TMDB · " + (site == null ? "" : site.name));
+        // mkoai 2.0.67: the view-all page takes the home tone it was
+        // opened with (openListTone). renderPage paints the root DARK
+        // and an opaque frosted Atmosphere over it, so the tone goes
+        // on the scroll too — the scroll is added after the
+        // Atmosphere and fills the viewport, so its opaque background
+        // is the page background the user sees. On a light tone the
+        // heading / eyebrow / count flip to the dark text set
+        // (HomeTone2066); on a dark tone every colour below stays
+        // exactly today's dark value.
+        a.root.setBackgroundColor(openListTone);
+        a.scroll.setBackgroundColor(openListTone);
+        if (HomeTone2066.isLight(openListTone)) {
+            View eye = a.root.findViewWithTag("page-eyebrow");
+            if (eye instanceof TextView) {
+                ((TextView) eye).setTextColor(HomeTone2066.mutedText(openListTone));
+            }
+            View head = a.root.findViewWithTag("page-heading");
+            if (head instanceof TextView) {
+                ((TextView) head).setTextColor(HomeTone2066.primaryText(openListTone));
+            }
+        }
         CatalogScreen.addBack(a, "tmdb-list-back");
         List<Cms.Video> videos = snapshotDisplay(row);
         if (videos == null || videos.isEmpty()) {
-            a.paragraph("目前沒有可播放的片。");
+            TextView empty =
+                    a.text(
+                            "目前沒有可播放的片。",
+                            16,
+                            HomeTone2066.isLight(openListTone)
+                                    ? HomeTone2066.mutedText(openListTone)
+                                    : MainActivity.MUTED);
+            empty.setLineSpacing(a.dp(5), 1);
+            a.body.addView(empty);
+            a.gap(a.body, 14);
             openListShown = 0;
             return;
         }
@@ -4361,7 +4424,9 @@ final class MobileShell {
                                 + " 部 · "
                                 + (confirmedOnly ? "僅顯示來源裡有的片" : "來源確認中"),
                         16,
-                        MainActivity.MUTED);
+                        HomeTone2066.isLight(openListTone)
+                                ? HomeTone2066.mutedText(openListTone)
+                                : MainActivity.MUTED);
         countTv.setTag("tmdb-list-count");
         countTv.setLineSpacing(a.dp(5), 1);
         a.body.addView(countTv);
@@ -4369,13 +4434,17 @@ final class MobileShell {
         LinearLayout listGrid = a.vertical();
         listGrid.setTag("tmdb-list-grid");
         a.body.addView(listGrid, new LinearLayout.LayoutParams(-1, -2));
-        fillTmdbListGrid(a, site, listGrid, videos);
+        fillTmdbListGrid(a, site, listGrid, videos, openListTone);
         openListShown = videos.size();
     }
 
     /** Fill a 3-column grid with TMDB list-page cards (initial render + live refresh share it). */
     private void fillTmdbListGrid(
-            MainActivity a, Cms.Site site, LinearLayout listGrid, List<Cms.Video> videos) {
+            MainActivity a,
+            Cms.Site site,
+            LinearLayout listGrid,
+            List<Cms.Video> videos,
+            int tone) {
         LinearLayout cards = null;
         for (int i = 0; i < videos.size(); i++) {
             if (i % 3 == 0) {
@@ -4407,7 +4476,16 @@ final class MobileShell {
             // AND in the subtitle below, showing twice.
             addPosterOverlay(a, art, v.remarks, null);
             card.addView(art, new LinearLayout.LayoutParams(-1, a.dp(190)));
-            TextView name = a.text(v.title, 13, 0xfff5f7fa);
+            // mkoai 2.0.67: the card text follows the page tone — dark
+            // text on a light page, exactly today's light values on a
+            // dark page.
+            TextView name =
+                    a.text(
+                            v.title,
+                            13,
+                            HomeTone2066.isLight(tone)
+                                    ? HomeTone2066.primaryText(tone)
+                                    : 0xfff5f7fa);
             name.setTypeface(null, Typeface.BOLD);
             name.setMaxLines(2);
             name.setEllipsize(TextUtils.TruncateAt.END);
@@ -4422,7 +4500,13 @@ final class MobileShell {
                             java.util.Calendar.getInstance()
                                     .get(java.util.Calendar.YEAR));
             if (!sub.isEmpty()) {
-                TextView subTv = a.text(sub, 11, 0xff8e959e);
+                TextView subTv =
+                        a.text(
+                                sub,
+                                11,
+                                HomeTone2066.isLight(tone)
+                                        ? HomeTone2066.mutedText(tone)
+                                        : 0xff8e959e);
                 subTv.setSingleLine(true);
                 subTv.setEllipsize(TextUtils.TruncateAt.END);
                 subTv.setPadding(a.dp(1), a.dp(2), a.dp(1), 0);

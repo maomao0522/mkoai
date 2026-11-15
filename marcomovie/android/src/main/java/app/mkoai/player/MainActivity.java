@@ -1269,10 +1269,12 @@ public final class MainActivity extends Activity {
         }
         if (!title.isEmpty()) {
             TextView eye = text(eyebrow, 12, 0xffa9c9f3);
+            eye.setTag("page-eyebrow");
             eye.setLetterSpacing(.15f);
             body.addView(eye);
             gap(body, 10);
             TextView heading = text(title, 36, WHITE);
+            heading.setTag("page-heading");
             heading.setTypeface(null, Typeface.BOLD);
             body.addView(heading);
             gap(body, 16);

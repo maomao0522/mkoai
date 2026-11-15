@@ -65,6 +65,17 @@ final class HeroDiffusion2063 {
     /** Desaturation: 0 = full grey, 1 = original saturation. 2.0.64: 0.70 (was 0.45). */
     static final float MUTE_FACTOR = 0.70f;
 
+    /**
+     * mkoai 2.0.67: a saturation-weighted tone whose saturation is below
+     * this is "muddy" — no hue dominates the sample — and {@link
+     * #averageTone} falls back to the lightest half instead. 64 is a
+     * quarter of the 0-255 saturation range: the real muddy cases sit
+     * at 31-38 (the 左撇子艾倫 poster/backdrop), the vivid cases at
+     * 97+ (a blue element) and the pinned teal cases at 108-115, so
+     * the threshold has margin on both sides.
+     */
+    static final int MUDDY_SAT_MAX = 64;
+
     /** Brightness scale applied after muting. 2.0.64: 0.65 (was 0.55). */
     static final float DARKEN_FACTOR = 0.65f;
 
@@ -138,6 +149,18 @@ final class HeroDiffusion2063 {
      * diffusion read as flat grey. When every sampled pixel is
      * grey/white/black (total weight zero) the plain average is used,
      * so a black-and-white poster still yields its honest grey.
+     *
+     * <p>mkoai 2.0.67: when the weighted tone itself is muddy
+     * (saturation below {@link #MUDDY_SAT_MAX}) the lightest half of
+     * the sample is used instead ({@link #lightestHalf}). A mostly-
+     * white poster or a landscape backdrop mixes several pale hues,
+     * so the weighted average lands grey-brown even though the image
+     * reads light — the hero shows the backdrop, so that grey-brown
+     * was the whole page below it. The lightest half is the image's
+     * own light side, and {@link #pageTone} still snaps it into the
+     * light band with its contrast guarantee. A muddy DARK image
+     * stays dark (its lightest half is still dark); a vivid image
+     * never reaches this branch.
      */
     static int averageTone(int[] pixels, int count) {
         if (pixels == null || pixels.length == 0 || count <= 0) return FALLBACK_BG;
@@ -150,9 +173,11 @@ final class HeroDiffusion2063 {
         long pg = 0;
         long pb = 0;
         int seen = 0;
+        int[] opaque = new int[n];
         for (int i = 0; i < n; i++) {
             int px = pixels[i];
             if ((px >>> 24) == 0) continue;
+            opaque[seen] = px;
             int cr = (px >> 16) & 0xff;
             int cg = (px >> 8) & 0xff;
             int cb = px & 0xff;
@@ -179,8 +204,57 @@ final class HeroDiffusion2063 {
             ar = (int) (r / weight);
             ag = (int) (g / weight);
             ab = (int) (b / weight);
+            if (Math.max(ar, Math.max(ag, ab)) - Math.min(ar, Math.min(ag, ab))
+                    < MUDDY_SAT_MAX) {
+                // mkoai 2.0.67: the weighted tone is muddy — see the
+                // averageTone doc. The lightest half is the image's
+                // own light side, not a guessed constant.
+                int[] light = lightestHalf(opaque, seen);
+                ar = light[0];
+                ag = light[1];
+                ab = light[2];
+            }
         }
         return 0xff000000 | (ar << 16) | (ag << 8) | ab;
+    }
+
+    /**
+     * mkoai 2.0.67: the average colour of the lightest half of the
+     * opaque pixels (brightest by channel sum, ties broken by sample
+     * order so the result is deterministic). {@code pixels} holds
+     * exactly {@code seen} opaque entries; the top half is indices
+     * {@code seen / 2 .. seen - 1} of the brightness-sorted order
+     * (for an even sample exactly half, for an odd sample the larger
+     * half). A uniform sample returns itself.
+     */
+    static int[] lightestHalf(int[] pixels, int seen) {
+        Integer[] order = new Integer[seen];
+        for (int i = 0; i < seen; i++) order[i] = i;
+        java.util.Arrays.sort(
+                order,
+                (x, y) -> {
+                    int bx = brightness(pixels[x]);
+                    int by = brightness(pixels[y]);
+                    if (bx != by) return Integer.compare(bx, by);
+                    return Integer.compare(x, y);
+                });
+        long r = 0;
+        long g = 0;
+        long b = 0;
+        int m = 0;
+        for (int j = seen / 2; j < seen; j++) {
+            int px = pixels[order[j]];
+            r += (px >> 16) & 0xff;
+            g += (px >> 8) & 0xff;
+            b += px & 0xff;
+            m++;
+        }
+        return new int[] {(int) (r / m), (int) (g / m), (int) (b / m)};
+    }
+
+    /** Brightness for the lightest-half sort: plain channel sum (0-765). */
+    static int brightness(int argb) {
+        return ((argb >> 16) & 0xff) + ((argb >> 8) & 0xff) + (argb & 0xff);
     }
 
     /**
@@ -364,10 +438,19 @@ final class HeroDiffusion2063 {
     /**
      * mkoai 2.0.65: the hero's height in dp for a page {@code pageWidthDp}
      * wide — the same formula the carousel uses (tallest 640dp, shortest
-     * 420dp, 1.25x the page width in between).
+     * 420dp, 1.5x the page width in between). mkoai 2.0.67: 1.25x moved
+     * the hero's bottom edge up to ~0.56 of the viewport on a POCO F5
+     * (491dp) and every row below it followed, ~100dp higher than the
+     * 2.0.65 rest state (~0.67, 587dp). 1.5x puts the bottom back at
+     * ~0.68 (589.5dp on a 393dp page) — the rows land where they were —
+     * and a 2:3 poster now fits the 393x589.5 box exactly (393/589.5 =
+     * 0.667), so the poster shows whole with no crop and no pillars.
+     * The hero still starts at the screen top (2.0.66); only the
+     * height changes, so the bloom hold ({@link #heroBottomFraction})
+     * follows it with no extra work.
      */
     static float heroHeightDp(float pageWidthDp) {
-        return Math.min(640f, Math.max(420f, pageWidthDp * 1.25f));
+        return Math.min(640f, Math.max(420f, pageWidthDp * 1.5f));
     }
 
     /**

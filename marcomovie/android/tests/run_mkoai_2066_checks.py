@@ -184,8 +184,11 @@ def main():
     # ---- Static: hero ratings row + backdrop-first art ----
     check('"hero-ratings"' in ms and "HeroRatings2066.ratingsLine(" in ms,
           "hero ratings: a ratings row under the synopsis, from remarks + the cached TMDB vote")
-    check("bindHeroArtwork" in ms and "FIT_CENTER" in ms,
-          "hero crop: bindHeroArtwork shows a poster whole (FIT_CENTER), never hard-cropped")
+    hero_art = ms[ms.index('private void bindHeroArtwork'):]
+    hero_art = hero_art[:hero_art.index('private View buildHeroShowcaseCard')]
+    check('ImageView.ScaleType.CENTER_CROP' in hero_art
+          and 'FIT_CENTER' not in hero_art and 'FIT_START' in hero_art,
+          'hero crop: bindHeroArtwork shows a poster full-bleed (CENTER_CROP, ~0% crop at the 2.0.67 hero height) and a backdrop FIT_START - no FIT_CENTER pillars')
     check("v.backdrop" in ms and "resolveHeroBackdrop" in ms,
           "hero crop: the hero prefers a landscape backdrop, resolved from the disk cache only")
     check("TmdbClient.cachedSearch" in ms and "static Item cachedSearch(" in tmdb,
@@ -330,13 +333,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.66"' in ev and "20067" in ev, "edition-versions.json = 2.0.66 / 20067")
+    check('"2.0.67"' in ev and "20068" in ev, "edition-versions.json = 2.0.67 / 20068")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.66"' in man and 'android:versionCode="20067"' in man,
-          "AndroidManifest.xml = 2.0.66 / 20067")
+    check('android:versionName="2.0.67"' in man and 'android:versionCode="20068"' in man,
+          "AndroidManifest.xml = 2.0.67 / 20068")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

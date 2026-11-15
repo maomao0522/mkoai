@@ -220,32 +220,33 @@ public class Home2066Checks {
                 "bottom veil: the input alpha is masked off (an opaque tone never makes a solid band)");
 
         // ---- heroBottomFraction (3-arg: the hero starts at the top) ----
-        near(HeroDiffusion2063.heroBottomFraction(0f, 491.25f, 873f),
-                0.5627f, 0.002f,
-                "heroBottomFraction: a POCO F5-ish rest state lands at ~0.56, not 0.67");
-        check(HeroDiffusion2063.heroBottomFraction(0f, 491.25f, 873f) > 0.40f,
+        near(HeroDiffusion2063.heroBottomFraction(0f, 589.5f, 873f),
+                0.6753f, 0.002f,
+                "heroBottomFraction: a POCO F5-ish rest state lands at ~0.68, back where 2.0.65 had it");
+        check(HeroDiffusion2063.heroBottomFraction(0f, 589.5f, 873f) > 0.40f,
                 "heroBottomFraction: the rest hero still ends below the old bloom's 0.40 hold");
         eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 420f, 2000f) * 100), 40,
                 "heroBottomFraction: a very tall viewport clamps the hold to 0.40");
-        eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 491f, 500f) * 100), 90,
+        eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 589.5f, 500f) * 100), 90,
                 "heroBottomFraction: a very short viewport clamps the hold to 0.90");
-        eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 491f, 0f) * 100), 40,
+        eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 589.5f, 0f) * 100), 40,
                 "heroBottomFraction: a zero viewport never divides, holds 0.40");
 
         // ---- bloomColorsAnchored: light-aware far colour ----
         int tone = 0xff484d53;
         int far = HeroDiffusion2063.backgroundTone(tone);
-        int[] poco = HeroDiffusion2063.bloomColorsAnchored(tone, 0.5627f);
+        int[] poco = HeroDiffusion2063.bloomColorsAnchored(tone, 0.6753f);
         eq(poco.length, HeroDiffusion2063.ANCHORED_BLOOM_STOPS,
                 "anchored bloom: eight stops");
-        check(poco[0] == tone && poco[1] == tone && poco[2] == tone && poco[3] == tone,
+        check(poco[0] == tone && poco[1] == tone && poco[2] == tone && poco[3] == tone
+                        && poco[4] == tone,
                 "anchored bloom: at the POCO hold the tone is still full at the hero's bottom edge");
-        check(poco[4] != tone && poco[5] != tone,
+        check(poco[5] != tone && poco[6] != tone,
                 "anchored bloom: at the POCO hold the fade starts only below the hero");
         eq(poco[7], far,
                 "anchored bloom: a dark hero's far colour is still backgroundTone(tone) — byte-identical to 2.0.65");
         int lightTone = 0xffe0ddd5;
-        int[] lightBloom = HeroDiffusion2063.bloomColorsAnchored(lightTone, 0.5627f);
+        int[] lightBloom = HeroDiffusion2063.bloomColorsAnchored(lightTone, 0.6753f);
         eq(lightBloom[7], HeroDiffusion2063.pageTone(lightTone),
                 "anchored bloom: a light hero's far colour is pageTone(tone), not backgroundTone");
         check(lightBloom[7] != lightTone && lightBloom[0] == lightTone,
