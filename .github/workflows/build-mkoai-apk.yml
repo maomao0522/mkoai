@@ -40,21 +40,33 @@ jobs:
           # Runner already has an Android SDK at $ANDROID_HOME.
           # Install exactly the build-tools and NDK this project pins.
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.0" "platforms;android-35" "ndk;28.2.13676358"
+          ls "$ANDROID_HOME/ndk/28.2.13676358/source.properties"
+          ls "$ANDROID_HOME/build-tools/35.0.0/aapt2"
 
       - name: Build phone + TV APKs
         working-directory: marcomovie
         env:
-          MARCOMOVIE_JDK: ${{ env.JAVA_HOME }}
-          MARCOMOVIE_BUILD_TOOLS: ${{ env.ANDROID_HOME }}/build-tools/35.0.0
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
           MARCOMOVIE_SIGNING_KEY: ${{ github.workspace }}/mkoai-marco.p12
           MARCOMOVIE_KEY_PASSWORD: android
           MARCOMOVIE_EXPECTED_SIGNER_SHA256: 266831fba744af59e47182f1d7b65e9033c90e3cf8867849b983b2f45a19f658
           LANG: C.utf8
           LC_ALL: C.utf8
-        run: python3 -X utf8 scripts/build_android.py
+        run: |
+          # $ANDROID_HOME and $JAVA_HOME are runner env vars: they expand in
+          # the shell, but are NOT visible to ${{ env.* }} expressions, so
+          # derive the SDK/NDK/JDK paths here (not in the env: block above).
+          # That was why run #1 failed: ANDROID_NDK_HOME became
+          # "/ndk/28.2.13676358" (empty ANDROID_HOME) and the build script
+          # could not find the NDK's source.properties.
+          export MARCOMOVIE_JDK="$JAVA_HOME"
+          export MARCOMOVIE_BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+          echo "JDK=$MARCOMOVIE_JDK"
+          echo "BUILD_TOOLS=$MARCOMOVIE_BUILD_TOOLS"
+          echo "NDK=$ANDROID_NDK_HOME"
+          ls "$ANDROID_NDK_HOME/source.properties"
+          python3 -X utf8 scripts/build_android.py
 
       - name: List built APKs
         run: |
