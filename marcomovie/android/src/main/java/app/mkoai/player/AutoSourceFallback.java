@@ -150,6 +150,23 @@ final class AutoSourceFallback {
                     });
             return;
         }
+        // mkoai 2.0.68: a warmed candidate (detail-page pre-resolve) plays
+        // immediately — no search, no probe, no waiting for the best
+        // (Maoki takePrepared). The warmed detail carries all episodes;
+        // takeWarmed only delivers it when it carries the wanted one.
+        RankedCandidate warmed = takeWarmed(a, title, wantedEpisode, failedSiteKey);
+        if (warmed != null) {
+            if (a.isFinishing() || ticket != a.generation) return;
+            final Playable warmResult = warmed.playable;
+            a.ui.post(
+                    () -> {
+                        try {
+                            done.accept(warmResult);
+                        } catch (Exception ignored) {
+                        }
+                    });
+            return;
+        }
         final List<Cms.Site> ordered = sites;
         final java.util.Map<String, Integer> priorityByKey = new java.util.HashMap<>();
         for (int i = 0; i < ordered.size(); i++) priorityByKey.put(ordered.get(i).key, i);
@@ -228,12 +245,22 @@ final class AutoSourceFallback {
                                                 int pri =
                                                         priorityByKey.getOrDefault(
                                                                 site.key, ordered.size());
+                                                // mkoai 2.0.68: learned speed + health ride
+                                                // along for the ranking tiebreakers (they
+                                                // never outrank the priority above).
+                                                SourceSpeed2068.Health health =
+                                                        SourceSpeed2068.healthFor(a, site.key);
                                                 RankedCandidate rc =
                                                         new RankedCandidate(
                                                                 new Playable(site, match, detail),
                                                                 hasEpisode,
                                                                 false,
-                                                                pri);
+                                                                pri,
+                                                                health == null ? -1 : health.probeMs,
+                                                                health != null
+                                                                        && SourceSpeed2068.coolingDown(
+                                                                                health,
+                                                                                System.currentTimeMillis()));
                                                 collected.add(rc);
                                                 if (hasEpisode && pri == 0) {
                                                     // Nothing can outrank the
@@ -246,6 +273,7 @@ final class AutoSourceFallback {
                                                         probeEpisode(
                                                                 a, site, detail, wantedEpisode);
                                                 rc.verified = probe.verified;
+                                                rc.latencyMs = probe.latencyMs;
                                                 if (hasEpisode && probe.verified)
                                                     startGrace.run();
                                             }
@@ -285,18 +313,48 @@ final class AutoSourceFallback {
         return false;
     }
 
-    /** 2.0.44: a collected reselect candidate, with the three ranking signals. {@code verified} is filled in after the probe runs. */
+    /** 2.0.44: a collected reselect candidate, with the ranking signals. {@code verified} and {@code latencyMs} are filled in after the probe runs. {@code emaMs} / {@code coolingDown} are the learned speed + health at collection time (mkoai 2.0.68). */
     static final class RankedCandidate {
         final Playable playable;
         final boolean hasEpisode;
         volatile boolean verified;
         final int priority;
+        /** This round's probe latency (ms); -1 when the probe never ran / the URL is not direct. */
+        volatile long latencyMs = -1;
+        /** Learned probe EMA (ms) at collection time; -1 when nothing was ever recorded. */
+        final long emaMs;
+        /** True when this source failed playback within the cooldown at collection time. */
+        final boolean coolingDown;
 
         RankedCandidate(Playable playable, boolean hasEpisode, boolean verified, int priority) {
+            this(playable, hasEpisode, verified, priority, -1, false);
+        }
+
+        RankedCandidate(
+                Playable playable,
+                boolean hasEpisode,
+                boolean verified,
+                int priority,
+                long emaMs,
+                boolean coolingDown) {
+            this(playable, hasEpisode, verified, priority, -1, emaMs, coolingDown);
+        }
+
+        RankedCandidate(
+                Playable playable,
+                boolean hasEpisode,
+                boolean verified,
+                int priority,
+                long latencyMs,
+                long emaMs,
+                boolean coolingDown) {
             this.playable = playable;
             this.hasEpisode = hasEpisode;
             this.verified = verified;
             this.priority = priority;
+            this.latencyMs = latencyMs;
+            this.emaMs = emaMs;
+            this.coolingDown = coolingDown;
         }
     }
 
@@ -307,14 +365,26 @@ final class AutoSourceFallback {
      * probe is a flaky signal (a 403 is usually anti-hotlink, not a dead
      * stream), while the priority list is the user's explicit choice — and
      * a genuinely dead stream is caught by the player's own error
-     * fallback at play time. Pure and unit-tested.
+     * fallback at play time.
+     *
+     * mkoai 2.0.68: two speed tiebreakers AFTER the three above, so they
+     * can never outrank the ad-rule priority — a source inside its
+     * post-failure cooldown sinks below a healthy one at the same
+     * priority, then the faster one wins (learned EMA first, else this
+     * round's probe latency). Pure and unit-tested.
      */
     static int compareRanked(RankedCandidate x, RankedCandidate y) {
         int c = Boolean.compare(y.hasEpisode, x.hasEpisode);
         if (c != 0) return c;
         c = Integer.compare(x.priority, y.priority);
         if (c != 0) return c;
-        return Boolean.compare(y.verified, x.verified);
+        c = Boolean.compare(y.verified, x.verified);
+        if (c != 0) return c;
+        c = Boolean.compare(x.coolingDown, y.coolingDown);
+        if (c != 0) return c;
+        return Long.compare(
+                SourceSpeed2068.speedOfEma(x.emaMs, x.latencyMs),
+                SourceSpeed2068.speedOfEma(y.emaMs, y.latencyMs));
     }
 
     /** 2.0.44: best-ranked collected candidate, or null when none was collected. */
@@ -323,6 +393,247 @@ final class AutoSourceFallback {
         for (RankedCandidate c : list) {
             if (c == null) continue;
             if (best == null || compareRanked(c, best) < 0) best = c;
+        }
+        return best;
+    }
+
+    // ---- mkoai 2.0.68: detail-page pre-resolve (Maoki _preResolveTop + warmup) ----
+    //
+    // While the user reads the detail page, the play episode's URLs are
+    // prepared in the background: the on-screen source's episode URL is
+    // probed (its detail is already in hand — no search, no re-fetch),
+    // then the top 3 prioritized sources are searched + detailed +
+    // probed, then up to 2 known-slow sources (EMA > 3s) get extra slots
+    // after the fast ones — Maoki's 3 slots + 2 slow extras. Results land
+    // in the probe cache (probeEpisode) and in the prepared map below,
+    // so a later find() for the same title can deliver without searching
+    // (takeWarmed — Maoki takePrepared).
+    //
+    // Bounds: at most 6 sites, one coordinator, the shared
+    // SearchCoordinator pools (no new threads). The warm stops when play
+    // starts (stopWarm, called from PlaybackController.resolvePlayer —
+    // Maoki's race-start stop) or when the user leaves the page (the
+    // listener sees a stale ticket and closes itself). A tap never waits
+    // for the warm: find() only uses entries that already finished.
+    private static final class WarmedEntry {
+        final RankedCandidate candidate;
+        final long createdMs;
+
+        WarmedEntry(RankedCandidate candidate, long createdMs) {
+            this.candidate = candidate;
+            this.createdMs = createdMs;
+        }
+    }
+
+    /** Prepared candidates by normalized title (memory only — never synced, never persisted). */
+    private static final java.util.concurrent.ConcurrentHashMap<String, List<WarmedEntry>> WARMED =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** The one in-flight warm coordinator, if any. */
+    private static volatile SearchCoordinator warmCoordinator;
+
+    private static final Object WARM_LOCK = new Object();
+
+    /** Stop an in-flight warm (play started, or a newer warm replaces it). */
+    static void stopWarm() {
+        synchronized (WARM_LOCK) {
+            if (warmCoordinator != null) {
+                try {
+                    warmCoordinator.close();
+                } catch (Exception ignored) {
+                }
+                warmCoordinator = null;
+            }
+        }
+    }
+
+    /**
+     * Warm the play episode's sources for one detail page. Fire-and-forget:
+     * returns immediately, never blocks the tap. The warmed episode is the
+     * one the Play button will play ({@code playEp} from
+     * {@code detailPlayEpisode}).
+     */
+    static void warmDetail(MainActivity a, Cms.Site site, Cms.Video detail, Cms.Episode playEp) {
+        try {
+            if (a == null || a.config == null || site == null || detail == null || playEp == null) {
+                return;
+            }
+            String title = Cms.searchTitle(detail);
+            if (title == null || title.isEmpty()) return;
+            String wantedEpisode = playEp.name;
+            stopWarm();
+            final int ticket = a.generation;
+            final boolean youthOn = a.prefs.getBoolean(Prefs.YOUTH_MODE, false);
+            final boolean hideLunli = SearchVariants.hideLunli(a);
+            List<Cms.Site> sites = new ArrayList<>();
+            for (Cms.Site s : a.config.sites) {
+                if (!s.searchable || !a.available(s)) continue;
+                if (youthOn && SearchVariants.isAdultSource(s)) continue;
+                sites.add(s);
+            }
+            final List<Cms.Site> ordered = SourcePreferences.prioritized(a, sites);
+            List<Cms.Site> warm = new ArrayList<>();
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            warm.add(site);
+            seen.add(site.key);
+            for (Cms.Site s : ordered) {
+                if (warm.size() >= 1 + SourceSpeed2068.PRERESOLVE_SLOTS) break;
+                if (seen.add(s.key)) warm.add(s);
+            }
+            int slowAdded = 0;
+            for (Cms.Site s : ordered) {
+                if (slowAdded >= SourceSpeed2068.PRERESOLVE_SLOW_EXTRA) break;
+                if (seen.contains(s.key)) continue;
+                if (SourceSpeed2068.isSlow(SourceSpeed2068.healthFor(a, s.key))) {
+                    seen.add(s.key);
+                    warm.add(s);
+                    slowAdded++;
+                }
+            }
+            final Cms.Site onScreen = site;
+            final Cms.Video onScreenDetail = detail;
+            final String warmTitle = title;
+            final java.util.Map<String, Integer> priorityByKey = new java.util.HashMap<>();
+            for (int i = 0; i < ordered.size(); i++) priorityByKey.put(ordered.get(i).key, i);
+            final int total = warm.size();
+            final AtomicInteger finished = new AtomicInteger();
+            final List<WarmedEntry> entries =
+                    java.util.Collections.synchronizedList(new ArrayList<WarmedEntry>());
+            WARMED.put(norm(warmTitle), entries);
+            final SearchCoordinator coordinator =
+                    new SearchCoordinator(
+                            (s2, query) -> {
+                                if (s2.key.equals(onScreen.key)) {
+                                    // Detail already in hand — no search.
+                                    List<Cms.Video> one = new ArrayList<>();
+                                    one.add(onScreenDetail);
+                                    return one;
+                                }
+                                return Cms.listing(a.engine(s2).search(query, 1)).videos;
+                            },
+                            (s2, videos, outcome) -> {
+                                try {
+                                    if (ticket != a.generation) {
+                                        stopWarm();
+                                        return;
+                                    }
+                                    if (outcome == SearchCoordinator.Outcome.RESULT) {
+                                    List<Cms.Video> usable = videos;
+                                    if (youthOn && videos != null && !videos.isEmpty()) {
+                                        usable = new ArrayList<>();
+                                        for (Cms.Video v : videos) {
+                                            if (!SearchVariants.isAdult(v, hideLunli))
+                                                usable.add(v);
+                                        }
+                                    }
+                                    Cms.Video match = bestMatch(usable, warmTitle);
+                                    if (match != null) {
+                                        try {
+                                            Cms.Video warmDetail;
+                                            if (s2.key.equals(onScreen.key)) {
+                                                // No re-fetch — use the
+                                                // detail the page shows.
+                                                warmDetail = onScreenDetail;
+                                            } else {
+                                                String raw = a.engine(s2).detail(match.id);
+                                                Cms.Listing parsed = Cms.listing(raw);
+                                                if (parsed.videos.isEmpty()) return;
+                                                warmDetail = parsed.videos.get(0);
+                                                if ((warmDetail.id == null
+                                                                || warmDetail.id.trim().isEmpty())
+                                                        && match.id != null)
+                                                    warmDetail.id = match.id.trim();
+                                            }
+                                            if (hasPlayableLines(a, s2, warmDetail)) {
+                                                boolean hasEpisode =
+                                                        detailHasEpisode(warmDetail, wantedEpisode);
+                                                int pri =
+                                                        priorityByKey.getOrDefault(
+                                                                s2.key, ordered.size());
+                                                SourceSpeed2068.Health health =
+                                                        SourceSpeed2068.healthFor(a, s2.key);
+                                                Probe probe =
+                                                        probeEpisode(
+                                                                a, s2, warmDetail, wantedEpisode);
+                                                entries.add(
+                                                        new WarmedEntry(
+                                                                new RankedCandidate(
+                                                                        new Playable(
+                                                                                s2, match, warmDetail),
+                                                                        hasEpisode,
+                                                                        probe.verified,
+                                                                        pri,
+                                                                        probe.latencyMs,
+                                                                        health == null
+                                                                                ? -1
+                                                                                : health.probeMs,
+                                                                        health != null
+                                                                                && SourceSpeed2068
+                                                                                        .coolingDown(
+                                                                                                health,
+                                                                                                System
+                                                                                                        .currentTimeMillis())),
+                                                                System.currentTimeMillis()));
+                                            }
+                                        } catch (Exception ignored) {
+                                            /* This source cannot play it; skip it. */
+                                        }
+                                    }
+                                }
+                                } finally {
+                                    if (finished.incrementAndGet() >= total) stopWarm();
+                                }
+                            },
+                            12000L,
+                            25000L);
+            synchronized (WARM_LOCK) {
+                warmCoordinator = coordinator;
+            }
+            coordinator.start(warm, ChineseConvert.t2s(warmTitle));
+        } catch (Throwable ignored) {
+            // Warm failure never affects anything — the tap takes the cold path.
+        }
+    }
+
+    /**
+     * A warmed candidate for this title + episode, or null. Only entries
+     * that already finished and are still fresh (3 min) count, only ones
+     * whose detail carries the wanted episode are delivered, and the
+     * failed site is skipped — find() then searches normally instead of
+     * waiting.
+     */
+    private static RankedCandidate takeWarmed(
+            MainActivity a, String title, String wantedEpisode, String failedSiteKey) {
+        if (title == null || title.isEmpty()) return null;
+        List<WarmedEntry> entries = WARMED.get(norm(title));
+        if (entries == null || entries.isEmpty()) return null;
+        List<WarmedEntry> snapshot;
+        synchronized (entries) {
+            snapshot = new ArrayList<>(entries);
+        }
+        long now = System.currentTimeMillis();
+        RankedCandidate best = null;
+        for (WarmedEntry e : snapshot) {
+            if (e == null || e.candidate == null || e.candidate.playable == null) continue;
+            if (now - e.createdMs > SourceSpeed2068.PREPARED_FRESH_MS) continue;
+            if (failedSiteKey != null
+                    && failedSiteKey.equals(e.candidate.playable.site.key)) continue;
+            // The warmed detail carries all episodes — re-check it for the
+            // wanted episode (the warm probed one episode; the user may
+            // ask for another).
+            boolean hasEpisode =
+                    detailHasEpisode(e.candidate.playable.detail, wantedEpisode);
+            if (!hasEpisode) continue;
+            RankedCandidate fresh =
+                    new RankedCandidate(
+                            e.candidate.playable,
+                            true,
+                            e.candidate.verified,
+                            e.candidate.priority,
+                            e.candidate.latencyMs,
+                            e.candidate.emaMs,
+                            e.candidate.coolingDown);
+            if (best == null || compareRanked(fresh, best) < 0) best = fresh;
         }
         return best;
     }
@@ -511,6 +822,12 @@ final class AutoSourceFallback {
 
     /** 2.0.44: URL of the wanted episode on this line (normalized-name or exact match), else null when this line does not carry it. */
     static String episodeUrl(Cms.Line line, String wantedEpisode) {
+        Cms.Episode ep = findEpisode(line, wantedEpisode);
+        return ep == null ? null : ep.url;
+    }
+
+    /** mkoai 2.0.68: the episode episodeUrl() would return, so the caller can also use its name (probe-cache key). */
+    private static Cms.Episode findEpisode(Cms.Line line, String wantedEpisode) {
         if (line == null || line.episodes == null || line.episodes.isEmpty()) return null;
         if (wantedEpisode != null && !wantedEpisode.trim().isEmpty()) {
             String wantNorm = WatchHistory.normEpisode(wantedEpisode);
@@ -518,11 +835,11 @@ final class AutoSourceFallback {
             for (Cms.Episode ep : line.episodes) {
                 if (ep == null || ep.name == null) continue;
                 if (WatchHistory.normEpisode(ep.name).equals(wantNorm)
-                        || ep.name.trim().equals(wantTrim)) return ep.url;
+                        || ep.name.trim().equals(wantTrim)) return ep;
             }
             return null;
         }
-        return line.episodes.get(0).url;
+        return line.episodes.get(0);
     }
 
     /** Probe the first episode of the line the detail page would auto-pick. */
@@ -539,6 +856,7 @@ final class AutoSourceFallback {
     static Probe probeEpisode(MainActivity a, Cms.Site site, Cms.Video detail, String wantedEpisode) {
         int nameQuality = 0;
         String url = null;
+        String probedEpisode = wantedEpisode;
         try {
             if (detail == null || detail.lines == null || detail.lines.isEmpty())
                 return new Probe(false, false, -1, 0);
@@ -546,21 +864,24 @@ final class AutoSourceFallback {
             if (lineIdx < 0 || lineIdx >= detail.lines.size()) lineIdx = 0;
             Cms.Line line = detail.lines.get(lineIdx);
             nameQuality = SearchVariants.lineQualityHeight(line.name);
-            url = episodeUrl(line, wantedEpisode);
-            if (url == null) {
+            Cms.Episode probedEp = findEpisode(line, wantedEpisode);
+            if (probedEp == null) {
                 // Wanted episode not on the preferred line — look on other lines.
                 for (Cms.Line other : detail.lines) {
                     if (other == line) continue;
-                    url = episodeUrl(other, wantedEpisode);
-                    if (url != null) break;
+                    probedEp = findEpisode(other, wantedEpisode);
+                    if (probedEp != null) break;
                 }
             }
-            if (url == null) {
+            if (probedEp == null) {
                 // Wanted episode is on no line — probe the first episode of
                 // the preferred line so the ranking still measures the stream.
                 if (line.episodes != null && !line.episodes.isEmpty())
-                    url = line.episodes.get(0).url;
+                    probedEp = line.episodes.get(0);
             }
+            if (probedEp == null) return new Probe(false, false, -1, nameQuality);
+            url = probedEp.url;
+            if (probedEp.name != null) probedEpisode = probedEp.name;
             if (url == null) return new Probe(false, false, -1, nameQuality);
             url = LocalProxy.rewrite(url.trim());
         } catch (Exception ignored) {
@@ -570,6 +891,19 @@ final class AutoSourceFallback {
         // the player resolves it at play time, so the probe cannot judge
         // it — pass it through as verified-but-unknown.
         if (!Cms.isDirectStreamUrl(url)) return new Probe(true, false, -1, nameQuality);
+        // mkoai 2.0.68: a cached verified verdict skips the network probe
+        // entirely (6h TTL, keyed by site + title + episode + URL).
+        String cacheKey =
+                SourceSpeed2068.cacheKey(
+                        site == null ? "" : site.key,
+                        Cms.searchTitle(detail),
+                        probedEpisode,
+                        url);
+        SourceSpeed2068.Verdict cached = SourceSpeed2068.lookupCached(a, cacheKey);
+        if (cached != null) {
+            return new Probe(
+                    true, true, cached.latencyMs, Math.max(nameQuality, cached.qualityHeight));
+        }
         boolean isM3u8 =
                 url.split("[?#]", 2)[0].toLowerCase(java.util.Locale.ROOT).endsWith(".m3u8")
                         || url.toLowerCase(java.util.Locale.ROOT).contains(".m3u8?");
@@ -596,18 +930,57 @@ final class AutoSourceFallback {
                 code = conn.getResponseCode();
             }
             long latency = System.currentTimeMillis() - start;
-            if (code < 200 || code >= 400) return new Probe(false, true, latency, nameQuality);
-            if (!isM3u8) return new Probe(true, true, latency, nameQuality);
+            if (code < 200 || code >= 400)
+                return finishProbe(
+                        a, site, detail, probedEpisode, url,
+                        new Probe(false, true, latency, nameQuality));
+            if (!isM3u8)
+                return finishProbe(
+                        a, site, detail, probedEpisode, url,
+                        new Probe(true, true, latency, nameQuality));
             // HLS master playlist: read the declared resolutions.
             String playlist = readProbeBody(conn, url, 32768, referer);
             int playlistHeight = SearchVariants.m3u8BestHeight(playlist);
-            return new Probe(
-                    true, true, latency, Math.max(nameQuality, playlistHeight));
+            return finishProbe(
+                    a, site, detail, probedEpisode, url,
+                    new Probe(
+                            true, true, latency, Math.max(nameQuality, playlistHeight)));
         } catch (Exception ignored) {
-            return new Probe(false, true, System.currentTimeMillis() - start, nameQuality);
+            return finishProbe(
+                    a, site, detail, probedEpisode, url,
+                    new Probe(false, true, System.currentTimeMillis() - start, nameQuality));
         } finally {
             if (conn != null) conn.disconnect();
         }
+    }
+
+    /**
+     * mkoai 2.0.68: one completed probe's bookkeeping — record the latency
+     * sample for the speed ranking (skipped when this thread was
+     * interrupted: a cancelled probe is a lower bound, not a latency)
+     * and store a verified verdict in the 6h cache. Failures are recorded
+     * but never cached (they may have been transient). Returns the probe
+     * unchanged.
+     */
+    private static Probe finishProbe(
+            MainActivity a,
+            Cms.Site site,
+            Cms.Video detail,
+            String episode,
+            String url,
+            Probe probe) {
+        try {
+            String siteKey = site == null ? "" : site.key;
+            SourceSpeed2068.recordProbe(a, siteKey, probe.latencyMs, probe.verified);
+            if (probe.verified) {
+                String key =
+                        SourceSpeed2068.cacheKey(
+                                siteKey, Cms.searchTitle(detail), episode, url);
+                SourceSpeed2068.storeCached(a, key, true, probe.latencyMs, probe.qualityHeight);
+            }
+        } catch (Throwable ignored) {
+        }
+        return probe;
     }
 
     private static String readProbeBody(

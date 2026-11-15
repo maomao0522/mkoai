@@ -181,16 +181,16 @@ def main():
           and "0f,\n                HeroDiffusion2063.heroHeightDp(" in ms,
           "hero dissolve: the bottom-edge fraction is computed from a hero that starts at 0")
 
-    # ---- Static: hero ratings row + backdrop-first art ----
+    # ---- Static: hero ratings row + poster-first art (2.0.68) ----
     check('"hero-ratings"' in ms and "HeroRatings2066.ratingsLine(" in ms,
           "hero ratings: a ratings row under the synopsis, from remarks + the cached TMDB vote")
     hero_art = ms[ms.index('private void bindHeroArtwork'):]
     hero_art = hero_art[:hero_art.index('private View buildHeroShowcaseCard')]
     check('ImageView.ScaleType.CENTER_CROP' in hero_art
-          and 'FIT_CENTER' not in hero_art and 'FIT_START' in hero_art,
-          'hero crop: bindHeroArtwork shows a poster full-bleed (CENTER_CROP, ~0% crop at the 2.0.67 hero height) and a backdrop FIT_START - no FIT_CENTER pillars')
+          and 'FIT_CENTER' not in hero_art and 'FIT_START' not in hero_art,
+          'hero crop: bindHeroArtwork shows a poster full-bleed (CENTER_CROP, ~0% crop at the 2.0.68 hero height) and a backdrop CENTER_CROP that fills the box - no FIT band')
     check("v.backdrop" in ms and "resolveHeroBackdrop" in ms,
-          "hero crop: the hero prefers a landscape backdrop, resolved from the disk cache only")
+          "hero crop: the hero prefers a portrait poster; a landscape backdrop only fills in when there is no poster")
     check("TmdbClient.cachedSearch" in ms and "static Item cachedSearch(" in tmdb,
           "hero crop: the backdrop comes from TmdbClient.cachedSearch (disk only, never network)")
 
@@ -248,9 +248,10 @@ def main():
           and "QuotaState2066.record" in read("TvmazeHome.java"),
           "quota: SimklHome + TvmazeHome record their quota on RateLimited")
 
-    # ---- Static: subtitles — documented, not hidden ----
-    check("needs a Worker-side quota marker" in pc,
-          "quota: the subtitle entry is deliberately NOT hidden (no Worker quota signal yet)")
+    # ---- Static: subtitles — removed in 2.0.68 (not hidden, gone) ----
+    check("needs a Worker-side quota marker" not in pc
+          and "SUBTITLE" not in quota,
+          "quota: the subtitle entry is gone with the feature (2.0.68 removed it)")
 
     # ---- Static: quota state shape ----
     check("quota_hide_" in quota and "quota_hide_" not in prefs,
@@ -333,13 +334,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.67"' in ev and "20068" in ev, "edition-versions.json = 2.0.67 / 20068")
+    check('"2.0.68"' in ev and "20069" in ev, "edition-versions.json = 2.0.68 / 20069")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.67"' in man and 'android:versionCode="20068"' in man,
-          "AndroidManifest.xml = 2.0.67 / 20068")
+    check('android:versionName="2.0.68"' in man and 'android:versionCode="20069"' in man,
+          "AndroidManifest.xml = 2.0.68 / 20069")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

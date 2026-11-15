@@ -33,9 +33,14 @@ package app.mkoai.player;
  *      (the 2.0.65 complaint). New box 393x589.5 (ratio 0.667, the
  *      poster's own ratio): CENTER_CROP crops 0% in dp, 0.06% of the
  *      width in pixels on a POCO F5 (1080x1621) — full-bleed with no
- *      crop and no pillars. A 16:9 backdrop FIT_START is full-width
- *      already (393x221.2dp). The scale-type switch itself
- *      (CENTER_CROP for posters, FIT_START kept for backdrops) is
+ *      crop and no pillars. 2.0.68: the hero is poster-first, and a
+ *      16:9 backdrop (poster-less videos only) is CENTER_CROP too —
+ *      it needs 1048dp of width, shows the middle 393dp (62.5% of
+ *      the width cropped, 31.25% each side, 0% of the height), so the
+ *      centred subject stays in frame and no flat-tone band is left
+ *      (the old FIT_START backdrop was 393x221.2dp with a 368.4dp
+ *      band below it). The scale-type switch itself (CENTER_CROP
+ *      for posters and backdrops, poster checked first) is
  *      source-checked by the runner.
  */
 public class Home2067Checks {
@@ -259,9 +264,15 @@ public class Home2067Checks {
         double[] pxFit = fitCenter(1080, 1621, 500, 750);
         near((1080 - pxFit[0]) / 2, 0.0, 0.01,
                 "full-bleed: even FIT_CENTER would leave no side pillar in the new box (the guarantee comes from the ratio, CENTER_CROP makes it unconditional)");
-        // A 16:9 backdrop FIT_START is full-width already.
+        // A 16:9 backdrop CENTER_CROP fills the box (2.0.68): it needs
+        // 589.5*16/9 = 1048dp of width and shows the middle 393dp.
+        near(589.5 * 16.0 / 9.0, 1048.0, 0.5,
+                "full-bleed: a 780x439 backdrop CENTER_CROP needs 1048dp of width to fill the box");
+        near((589.5 * 16.0 / 9.0 - 393.0) / (589.5 * 16.0 / 9.0) * 100, 62.5, 0.1,
+                "full-bleed: a 780x439 backdrop CENTER_CROP crops 62.5% of the width, 0% of the height");
+        // The old FIT_START backdrop was 393x221.2dp and left a band.
         near(393.0 * 439.0 / 780.0, 221.2, 0.1,
-                "full-bleed: a 780x439 backdrop FIT_START in a 393dp box is 221.2dp tall and full-width (pillars 0)");
+                "full-bleed: the old FIT_START backdrop was 221.2dp tall (a 368.3dp band below it)");
 
         System.out.println(passed + " Home2067 checks passed");
     }

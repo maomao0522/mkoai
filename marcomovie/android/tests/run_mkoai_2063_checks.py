@@ -237,8 +237,8 @@ def main():
           "view-all: the subtitle keeps only the year line (remarks live on the poster)")
     check("name.setMaxLines(2);" in ms,
           "view-all: the card title allows two lines (no more mid-word truncation)")
-    check("lp.setMargins(a.dp(5), a.dp(5), a.dp(14), a.dp(19));" in ms,
-          "view-all: the card margins are (5,5,14,19), aligned with the home")
+    check("lp.setMargins(a.dp(3), a.dp(3), a.dp(6), a.dp(12));" in ms,
+          "view-all: the card margins are (3,3,6,12) (2.0.68 denser grid)")
     check("glassBg(0xb81c2421, 0xb8141a18, a.dp(16), a.dp(0.7f), 0x26ffffff)" in ms,
           "search row: the green tint is replaced by the home card neutrals (alpha kept)")
     check("glassBg(0xb81b2320, 0xb8131917, a.dp(16)" not in ms,
@@ -292,13 +292,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.67"' in ev and "20068" in ev, "edition-versions.json = 2.0.67 / 20068")
+    check('"2.0.68"' in ev and "20069" in ev, "edition-versions.json = 2.0.68 / 20069")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.67"' in man and 'android:versionCode="20068"' in man,
-          "AndroidManifest.xml = 2.0.67 / 20068")
+    check('android:versionName="2.0.68"' in man and 'android:versionCode="20069"' in man,
+          "AndroidManifest.xml = 2.0.68 / 20069")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

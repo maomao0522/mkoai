@@ -26,9 +26,10 @@ import org.json.JSONObject;
  * <p>Privacy: the distinct_id is a random UUID generated on first use and stored locally. It is
  * never derived from any personal identifier — no account, device id, or phone number.
  *
- * <p>Only these five events are sent (wired by the caller elsewhere): app_open, video_play
- * (properties only {@code {title}} — never a URL or source), video_search, trailer_open,
- * subtitle_download.
+ * <p>Only these four events are sent (wired by the caller elsewhere): app_open, video_play
+ * (properties only {@code {title}} — never a URL or source), video_search, trailer_open.
+ * (mkoai 2.0.68: subtitle_download is gone with the online subtitle
+ * feature — the fifth event no longer exists.)
  */
 public final class PostHogClient {
 

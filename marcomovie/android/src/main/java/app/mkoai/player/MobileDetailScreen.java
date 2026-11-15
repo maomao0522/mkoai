@@ -1402,6 +1402,15 @@ final class MobileDetailScreen {
                     // (Only direct stream URLs can be probed before playback; sources
                     // that need parsing probe after playback starts, in the player.)
                     final Cms.Episode playEp = detailPlayEpisode(a, v, remembered);
+                    // mkoai 2.0.68: warm the play episode's sources while the
+                    // user reads the page (Maoki _preResolveTop + warmup) —
+                    // fire-and-forget, never blocks the tap. The on-screen
+                    // source's URL is probed from the detail in hand; the
+                    // top 3 prioritized sources + up to 2 known-slow ones
+                    // are searched + detailed + probed in the background.
+                    // Play start stops the warm (resolvePlayer); a warmed
+                    // candidate lets find() deliver without searching.
+                    if (playEp != null) AutoSourceFallback.warmDetail(a, s, v, playEp);
                     TextView qualityBtn =
                             a.text(detailQualityLabel(a, s, v, playEp), 13, 0x99ffffff);
                     qualityBtn.setTag("detail-quality-picker");

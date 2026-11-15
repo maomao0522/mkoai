@@ -25,8 +25,9 @@ import org.json.JSONObject;
  *  YoutubeClient.watchUrl
  *  FanartClient.pickBackground / pickLogo / pickPoster — en preference,
  *      fallbacks, empty data
- *  SubtitleClient.parseResults — SubDL pack expansion, OpenSubtitles
- *      file_id fallback, skipped items, ZH_BG-first sort
+ *  (2.0.68 removed the online subtitle feature, so the
+ *      SubtitleClient.parseResults tests are gone with it; the local
+ *      subtitle file import is untouched and covered by the runner.)
  *  TranslateClient.truncate / splitChunks — 5000 cap, chunk boundaries
  *  PostHogClient.buildEventBody — shape + NEVER an api_key; distinctId
  *      stability + UUID format; the analytics switch default
@@ -224,44 +225,6 @@ public class Home2062Checks {
                 "Fanart poster: tvposter when no movieposter");
         eq(FanartClient.pickPoster(new JSONObject("{}")), null,
                 "Fanart poster: empty data:{} -> null");
-
-        // ---- SubtitleClient.parseResults ----
-        JSONArray subs = new JSONArray(
-                "[{\"provider\":\"subdl\",\"name\":\"en.srt\",\"language\":\"EN\",\"format\":\"srt\","
-                        + "\"url\":\"https://dl.subdl.com/en.srt\"},"
-                        + "{\"provider\":\"subdl\",\"name\":\"Pack\",\"language\":\"ZH_BG\",\"format\":\"srt\","
-                        + "\"is_pack\":true,\"unpack_files\":["
-                        + "{\"name\":\"E01.srt\",\"language\":\"ZH_BG\",\"format\":\"srt\","
-                        + "\"season\":1,\"episode\":1,\"url\":\"https://dl.subdl.com/e1.srt\"},"
-                        + "{\"name\":\"E02.srt\",\"language\":\"ZH_BG\",\"format\":\"srt\","
-                        + "\"season\":1,\"episode\":2,\"url\":\"https://dl.subdl.com/e2.srt\"}]},"
-                        + "{\"provider\":\"opensubtitles\",\"name\":\"os.srt\",\"language\":\"EN\","
-                        + "\"file_id\":\"12345\"},"
-                        + "{\"provider\":\"opensubtitles\",\"name\":\"os2.srt\",\"language\":\"zh-TW\","
-                        + "\"files\":[{\"file_id\":\"999\",\"file_name\":\"os2.srt\"}]},"
-                        + "{\"provider\":\"subdl\",\"name\":\"nourl.srt\",\"language\":\"EN\",\"format\":\"srt\"},"
-                        + "{\"provider\":\"other\",\"name\":\"x.srt\",\"language\":\"EN\"}]");
-        List<SubtitleClient.SubtitleResult> parsed = SubtitleClient.parseResults(subs);
-        eq(parsed.size(), 5, "Subtitles: pack expands to 2, no-url + unknown provider skipped");
-        eq(parsed.get(0).language, "ZH_BG", "Subtitles: ZH_BG sorts first");
-        eq(parsed.get(1).language, "ZH_BG", "Subtitles: second ZH_BG (pack file) sorts second");
-        eq(parsed.get(2).language, "zh-TW", "Subtitles: zh-TW ranks with ZH_BG");
-        check(parsed.get(0).name.equals("E01.srt") && parsed.get(1).name.equals("E02.srt"),
-                "Subtitles: pack expands to E01+E02, the pack itself is dropped");
-        eq(parsed.get(0).season, 1, "Subtitles: unpacked file keeps season 1");
-        eq(parsed.get(0).episode, 1, "Subtitles: unpacked file keeps episode 1");
-        check(!parsed.get(0).isPack, "Subtitles: unpacked files are not packs");
-        boolean osByFileId = false;
-        boolean osByFiles0 = false;
-        for (SubtitleClient.SubtitleResult r : parsed) {
-            if ("opensubtitles".equals(r.provider) && "12345".equals(r.fileId)) osByFileId = true;
-            if ("opensubtitles".equals(r.provider) && "999".equals(r.fileId)) osByFiles0 = true;
-        }
-        check(osByFileId, "Subtitles: OpenSubtitles keeps its file_id");
-        check(osByFiles0, "Subtitles: OpenSubtitles falls back to files[0].file_id");
-        eq(SubtitleClient.parseResults(null).size(), 0, "Subtitles: null results -> empty");
-        eq(SubtitleClient.parseResults(new JSONArray("[]")).size(), 0,
-                "Subtitles: empty results -> empty");
 
         // ---- TranslateClient.truncate / splitChunks ----
         StringBuilder big = new StringBuilder();

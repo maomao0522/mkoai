@@ -2786,26 +2786,31 @@ final class MobileShell {
     }
 
     /**
-     * mkoai 2.0.66: hero artwork binding (the 2.0.65 crop fix). The hero
-     * prefers the landscape backdrop (TMDB backdrop_path 16:9 — Emby's
-     * hero is a backdrop too); with a backdrop the artwork is FIT_START
-     * (a 16:9 strip at the top, the title block below it on the page
-     * tone). With only a portrait poster the artwork is CENTER_CROP —
-     * the poster fills the card edge to edge, like Emby's hero. mkoai
-     * 2.0.67: FIT_CENTER is gone — it left 32.75dp tone pillars on
-     * each side of the poster in the 393x491.25 box, so the hero never
-     * met the phone edges. CENTER_CROP cut ~17% of the poster's height
-     * in that box (the 2.0.65 complaint), but the 2.0.67 hero is
-     * 393x589.5 — the same 2:3 ratio as the poster — so the crop is
-     * ~0% (0.06% of the width in pixels on a POCO F5). The card's
-     * fixed height (the pager's) is unchanged; only the scale type
-     * changes. A backdrop that fails to load falls back to the poster
-     * (CENTER_CROP) through the same reliable path.
+     * mkoai 2.0.68: hero artwork binding — portrait poster first. The
+     * hero box is 393x589.5 (ratio 0.6667, the poster's own 2:3), so a
+     * CENTER_CROP poster fills it with ~0% crop (0.06% of the width in
+     * pixels on a POCO F5) and the subject dead centre. A 16:9 backdrop
+     * used to win here (2.0.66/2.0.67: FIT_START, a 393x221.2dp strip at
+     * the top, the title block below it on the page tone) and left a
+     * ~368dp flat-tone band below it — the 《心鄉迷踪》 shot, which
+     * reads as half a broken image. Only a video with no usable poster
+     * falls back to the backdrop, and the backdrop is CENTER_CROP too:
+     * it fills the box (100%, no band), the middle 37.5% of its width
+     * stays in frame (62.5% of the sides are cropped, 0% of the
+     * height), so the subject — which sits near the centre of a 16:9
+     * key visual — stays centred. A backdrop that fails to load falls
+     * back to the poster (CENTER_CROP) through the same reliable path.
      */
     private void bindHeroArtwork(ImageView artwork, Cms.Video featured) {
+        String poster = featured.poster;
+        if (poster != null && !poster.isEmpty() && !ImageLoader.failed(poster)) {
+            artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            bindReliablePoster(artwork, featured);
+            return;
+        }
         String backdrop = featured.backdrop;
         if (backdrop != null && !backdrop.isEmpty() && !ImageLoader.failed(backdrop)) {
-            artwork.setScaleType(ImageView.ScaleType.FIT_START);
+            artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
             artwork.setImageDrawable(new PosterPlaceholder(featured.title));
             artwork.setContentDescription(featured.title + " 封面");
             ImageLoader.onFailure(artwork, () -> {
@@ -2967,8 +2972,8 @@ final class MobileShell {
         // mkoai 2.0.66: one-shot lazy backdrop / ratings resolution
         // (disk cache only — see resolveHeroBackdrop).
         resolveHeroBackdrop(page);
-        // mkoai 2.0.66: the tone follows the image actually shown — the
-        // backdrop when the hero has one, else the poster.
+        // mkoai 2.0.68: the tone follows the image actually shown — the
+        // poster when the hero has one, else the backdrop.
         String key = heroArtworkKey(v);
         Integer cached = heroToneCache.get(key);
         if (cached != null) {
@@ -2985,26 +2990,28 @@ final class MobileShell {
         sampleHeroTone(page, key, gen, 0);
     }
 
-    /** The tone-cache key for a hero video: the image actually shown (backdrop first, else poster). */
+    /** The tone-cache key for a hero video: the image actually shown (poster first, else backdrop). */
     private static String heroArtworkKey(Cms.Video v) {
         if (v == null) return "title:";
-        if (v.backdrop != null && !v.backdrop.isEmpty()) return v.backdrop;
         if (v.poster != null && !v.poster.isEmpty()) return v.poster;
+        if (v.backdrop != null && !v.backdrop.isEmpty()) return v.backdrop;
         return "title:" + v.title;
     }
 
     /**
-     * mkoai 2.0.66: one-shot lazy backdrop / ratings resolution for hero
+     * mkoai 2.0.68: one-shot lazy backdrop / ratings resolution for hero
      * page {@code page} — disk cache only (TmdbClient.cachedSearch, 7-day
      * TTL, never the network), on the artwork pool, so the hero adds no
      * requests and no new threads. If the cache yields a backdrop it is
-     * recorded on the Video (future builds use it directly) and the
-     * artwork is swapped to it — but ONLY while the poster has not
-     * decoded yet (the artwork still shows the placeholder); a decoded
-     * poster is never yanked mid-view, and it is already effectively
-     * un-cropped (CENTER_CROP, ~0% crop at the 2.0.67 hero height). The swap re-samples the tone under the backdrop key,
-     * and a cached TMDB vote reveals the ratings row. Runs once per
-     * artwork key (heroBackdropResolved), never on every rotation.
+     * recorded on the Video (future builds use it directly as the
+     * poster-less fallback) and the artwork is swapped to it — but
+     * ONLY for a video with no poster at all, and only while the
+     * artwork still shows the placeholder; a poster hero is never
+     * yanked mid-view, and its tone is never re-sampled under a
+     * backdrop the user cannot see. The swap re-samples the tone
+     * under the backdrop key, and a cached TMDB vote reveals the
+     * ratings row. Runs once per artwork key (heroBackdropResolved),
+     * never on every rotation.
      */
     private void resolveHeroBackdrop(final int page) {
         if (page < 0 || page >= heroCandidates.size()) return;
@@ -3027,7 +3034,14 @@ final class MobileShell {
                         if (gen != heroDiffusionGen || page != heroDiffusionPage) return;
                         if (backdrop != null && !backdrop.isEmpty()) {
                             v.backdrop = backdrop;
-                            if (page < heroArtworks.size()) {
+                            // mkoai 2.0.68: the late backdrop only swaps in
+                            // when the hero has no poster at all — a poster
+                            // hero never gets yanked, and the tone is never
+                            // re-sampled under a backdrop the user cannot
+                            // see. Poster-less heroes get the backdrop
+                            // CENTER_CROP (fills the box, subject centred).
+                            if ((v.poster == null || v.poster.isEmpty())
+                                    && page < heroArtworks.size()) {
                                 ImageView art = heroArtworks.get(page);
                                 if (art != null
                                         && !(art.getDrawable() instanceof BitmapDrawable)) {
@@ -4351,7 +4365,6 @@ final class MobileShell {
         List<Cms.Video> now = snapshotDisplay(openListRow);
         if (now.size() == openListShown) return;
         View gridView = a.root.findViewWithTag("tmdb-list-grid");
-        View countView = a.root.findViewWithTag("tmdb-list-count");
         if (!(gridView instanceof LinearLayout)) {
             openListRow = null;
             openListSite = null;
@@ -4361,21 +4374,10 @@ final class MobileShell {
         LinearLayout grid = (LinearLayout) gridView;
         grid.removeAllViews();
         fillTmdbListGrid(a, openListSite, grid, now, openListTone);
-        if (countView instanceof TextView) {
-            // 2.0.51: pending-only rows are fail-open recommendations,
-            // not source-confirmed titles — say so honestly.
-            boolean confirmedOnly = !openListRow.confirmed.isEmpty();
-            ((TextView) countView)
-                    .setText(
-                            "共 "
-                                    + now.size()
-                                    + " 部 · "
-                                    + (confirmedOnly ? "僅顯示來源裡有的片" : "來源確認中"));
-        }
         openListShown = now.size();
     }
 
-    /** Full list page for a TMDB row / media card (renderPage scaffold + 3-col grid). */
+    /** Full list page for a TMDB row / media card (renderPage scaffold + 4-col grid). */
     private void showTmdbListPage(
             MainActivity a, Cms.Site site, String title, TmdbRow row) {
         a.renderPage(title, "TMDB · " + (site == null ? "" : site.name));
@@ -4385,9 +4387,10 @@ final class MobileShell {
         // on the scroll too — the scroll is added after the
         // Atmosphere and fills the viewport, so its opaque background
         // is the page background the user sees. On a light tone the
-        // heading / eyebrow / count flip to the dark text set
-        // (HomeTone2066); on a dark tone every colour below stays
-        // exactly today's dark value.
+        // heading / eyebrow flip to the dark text set (HomeTone2066);
+        // on a dark tone every colour below stays exactly today's
+        // dark value. (mkoai 2.0.68: the count line is gone — see
+        // below — so there is no count text to re-tint.)
         a.root.setBackgroundColor(openListTone);
         a.scroll.setBackgroundColor(openListTone);
         if (HomeTone2066.isLight(openListTone)) {
@@ -4416,21 +4419,10 @@ final class MobileShell {
             openListShown = 0;
             return;
         }
-        boolean confirmedOnly = !row.confirmed.isEmpty();
-        TextView countTv =
-                a.text(
-                        "共 "
-                                + videos.size()
-                                + " 部 · "
-                                + (confirmedOnly ? "僅顯示來源裡有的片" : "來源確認中"),
-                        16,
-                        HomeTone2066.isLight(openListTone)
-                                ? HomeTone2066.mutedText(openListTone)
-                                : MainActivity.MUTED);
-        countTv.setTag("tmdb-list-count");
-        countTv.setLineSpacing(a.dp(5), 1);
-        a.body.addView(countTv);
-        a.gap(a.body, 14);
+        // mkoai 2.0.68: the count line is deleted — the view itself
+        // is gone, not hidden. It lived only on this page (created
+        // here and updated in refreshOpenTmdbList); no other page
+        // shared it, so nothing else changes.
         LinearLayout listGrid = a.vertical();
         listGrid.setTag("tmdb-list-grid");
         a.body.addView(listGrid, new LinearLayout.LayoutParams(-1, -2));
@@ -4438,7 +4430,14 @@ final class MobileShell {
         openListShown = videos.size();
     }
 
-    /** Fill a 3-column grid with TMDB list-page cards (initial render + live refresh share it). */
+    /** Fill a 4-column grid with TMDB list-page cards (initial render + live refresh share it).
+     * mkoai 2.0.68: 3 -> 4 columns, card padding 5 -> 3dp, margins
+     * (5,5,14,19) -> (3,3,6,12), art height 190 -> 140dp — the grid
+     * reads visibly denser (POCO F5: ~13 cards per viewport instead
+     * of ~8). The art box stays ~2:3 (92.25x140dp, ratio 0.659), so
+     * the poster still fills with ~1% crop; the title stays 13sp
+     * bold, max 2 lines. Phone only — the TV grid is a separate
+     * builder in HomeScreen and is untouched. */
     private void fillTmdbListGrid(
             MainActivity a,
             Cms.Site site,
@@ -4447,7 +4446,7 @@ final class MobileShell {
             int tone) {
         LinearLayout cards = null;
         for (int i = 0; i < videos.size(); i++) {
-            if (i % 3 == 0) {
+            if (i % 4 == 0) {
                 cards = a.row();
                 cards.setGravity(Gravity.TOP);
                 cards.setClipChildren(false);
@@ -4456,10 +4455,10 @@ final class MobileShell {
             }
             Cms.Video v = videos.get(i);
             LinearLayout card = a.vertical();
-            card.setPadding(a.dp(5), a.dp(5), a.dp(5), a.dp(10));
+            card.setPadding(a.dp(3), a.dp(3), a.dp(3), a.dp(8));
             card.setClipChildren(false);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
-            lp.setMargins(a.dp(5), a.dp(5), a.dp(14), a.dp(19));
+            lp.setMargins(a.dp(3), a.dp(3), a.dp(6), a.dp(12));
             MobileDetailScreen.bindTouchFeedback(card);
             card.setOnClickListener(view -> a.openHomeCard(site, v));
             FrameLayout art = new FrameLayout(a);
@@ -4475,7 +4474,7 @@ final class MobileShell {
             // badge (same as the home card) — the year used to sit here
             // AND in the subtitle below, showing twice.
             addPosterOverlay(a, art, v.remarks, null);
-            card.addView(art, new LinearLayout.LayoutParams(-1, a.dp(190)));
+            card.addView(art, new LinearLayout.LayoutParams(-1, a.dp(140)));
             // mkoai 2.0.67: the card text follows the page tone — dark
             // text on a light page, exactly today's light values on a
             // dark page.

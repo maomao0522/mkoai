@@ -250,8 +250,8 @@ def main():
     hero_art = ms[ms.index("private void bindHeroArtwork"):]
     hero_art = hero_art[:hero_art.index("private View buildHeroShowcaseCard")]
     check("ImageView.ScaleType.CENTER_CROP" in hero_art
-          and "FIT_CENTER" not in hero_art and "FIT_START" in hero_art,
-          "full-bleed: bindHeroArtwork shows a poster CENTER_CROP and a backdrop FIT_START, no FIT_CENTER")
+          and "FIT_CENTER" not in hero_art and "FIT_START" not in hero_art,
+          "full-bleed: bindHeroArtwork shows a poster CENTER_CROP and a backdrop CENTER_CROP that fills the box, no FIT band")
     check("pageWidth = Math.max(a.dp(240), a.windowWidth())" in ms,
           "full-bleed: the carousel page is exactly the window width (no peek, no inset)")
     check("heroContainer.setPadding(0, 0, 0, 0)" in ms,
@@ -295,13 +295,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.67"' in ev and "20068" in ev, "edition-versions.json = 2.0.67 / 20068")
+    check('"2.0.68"' in ev and "20069" in ev, "edition-versions.json = 2.0.68 / 20069")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.67"' in man and 'android:versionCode="20068"' in man,
-          "AndroidManifest.xml = 2.0.67 / 20068")
+    check('android:versionName="2.0.68"' in man and 'android:versionCode="20069"' in man,
+          "AndroidManifest.xml = 2.0.68 / 20069")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

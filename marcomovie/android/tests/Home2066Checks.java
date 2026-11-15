@@ -402,14 +402,14 @@ public class Home2066Checks {
                 "quota: a feature with nothing recorded is never hidden");
         seq(QuotaState2066.key(QuotaState2066.TRANSLATE), "quota_hide_translate",
                 "quota: the storage key is quota_hide_<feature>");
-        check(QuotaState2066.FEATURES.length == 8,
-                "quota: eight features are tracked");
+        check(QuotaState2066.FEATURES.length == 7,
+                "quota: seven features are tracked (subtitle removed in 2.0.68)");
         boolean hasSubtitle = false;
         for (String f : QuotaState2066.FEATURES) {
-            if (QuotaState2066.SUBTITLE.equals(f)) hasSubtitle = true;
+            if ("subtitle".equals(f)) hasSubtitle = true;
         }
-        check(hasSubtitle,
-                "quota: the subtitle slot exists for the future Worker quota marker");
+        check(!hasSubtitle,
+                "quota: the subtitle slot is gone (2.0.68 removed the feature)");
 
         System.out.println(passed + " Home2066 checks passed");
     }

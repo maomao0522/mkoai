@@ -107,6 +107,10 @@ final class Prefs {
     static final String AD_MARKS = "ad_marks";
     /** mkoai 2.0.62: PostHog anonymous distinct_id (random UUID). Local only — an identifier, not a user setting, so deliberately NOT in KEYS. */
     static final String POSTHOG_DISTINCT_ID = "posthog_distinct_id";
+    /** mkoai 2.0.68: per-source probe speed + health (JSON). Local only — device-specific measurements, deliberately NOT in KEYS, so they are never uploaded to Supabase. */
+    static final String SOURCE_SPEED_2068 = "source_speed_2068";
+    /** mkoai 2.0.68: probe-verdict cache (JSON). Local only — same reason as SOURCE_SPEED_2068. */
+    static final String SOURCE_URL_CACHE_2068 = "source_url_cache_2068";
     static final String GLOBAL_SEARCH_HISTORY = "global_search_history";
     static final String PHONETIC_TITLES = "phonetic_titles";
 

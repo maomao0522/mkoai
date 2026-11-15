@@ -180,10 +180,10 @@ def main():
           "cards: all five poster arts get the faint 2dp shadow")
     check(ms.count("a.dp(12), 0, 0") == 5,
           "cards: all five poster arts keep the rounded dark placeholder, stroke zero")
-    check("lp.setMargins(a.dp(5), a.dp(5), a.dp(14), a.dp(19));" in ms,
-          "cards: the grid card margins are untouched (5,5,14,19)")
-    check("card.setPadding(a.dp(5), a.dp(5), a.dp(5), a.dp(10));" in ms,
-          "cards: the grid card padding is untouched")
+    check("lp.setMargins(a.dp(3), a.dp(3), a.dp(6), a.dp(12));" in ms,
+          "cards: the grid card margins are (3,3,6,12) (2.0.68 denser view-all grid)")
+    check("card.setPadding(a.dp(3), a.dp(3), a.dp(3), a.dp(8));" in ms,
+          "cards: the grid card padding is (3,3,3,8) (2.0.68 denser view-all grid)")
 
     # ---- Static: TV home untouched ----
     hs = read("HomeScreen.java")
@@ -206,13 +206,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.67"' in ev and "20068" in ev, "edition-versions.json = 2.0.67 / 20068")
+    check('"2.0.68"' in ev and "20069" in ev, "edition-versions.json = 2.0.68 / 20069")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.67"' in man and 'android:versionCode="20068"' in man,
-          "AndroidManifest.xml = 2.0.67 / 20068")
+    check('android:versionName="2.0.68"' in man and 'android:versionCode="20069"' in man,
+          "AndroidManifest.xml = 2.0.68 / 20069")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

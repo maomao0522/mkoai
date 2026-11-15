@@ -235,6 +235,12 @@ final class PlaybackController {
 
     static void resolvePlayer(
             MainActivity a, Cms.Site s, Cms.Video v, Cms.Line line, Cms.Episode ep) {
+        // mkoai 2.0.68: play starts — stop the detail-page pre-resolve
+        // (Maoki _stopUnneededPreResolves / _pausePreResolve: background
+        // resolving must never compete with the player for resources).
+        // Finished warm entries stay usable for the hop/find path; only
+        // the unfinished work is stopped.
+        AutoSourceFallback.stopWarm();
         if (a.miniMode) {
             a.changingMiniEpisode = true;
             showEpisodeDetails(a, s, v);
@@ -1040,6 +1046,17 @@ final class PlaybackController {
         }
         a.generation++;
         final int ticket = a.generation;
+        // mkoai 2.0.68: startup error grace (Maoki StartupFailureGate) —
+        // one transient error inside 20s of this source starting is
+        // forgiven with ONE same-URL retry (a fresh prepare), not by
+        // swallowing the error: Media3 does not recover by itself, so
+        // swallowing would leave the video stuck. A second error hops
+        // as before. The retry is bounded once per episode by the
+        // "_startupRetry" flag on ep.media (it survives the playerPage
+        // re-entry). Decode errors bypass the grace (Maoki's bypass for
+        // real decode/format errors) — see the listener below.
+        final long sourceStartedAtMs = System.currentTimeMillis();
+        final long[] firstErrorAtMs = {0};
         a.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (!a.isTvDevice()) {
             a.applyMobileSystemBars(true);
@@ -1400,6 +1417,59 @@ final class PlaybackController {
                                                                     return true;
                                                                 }
                                                             }
+                                                            // mkoai 2.0.68: startup error grace —
+                                                            // the same-source retries above are
+                                                            // exhausted and this error would hop
+                                                            // to another line/source. Inside 20s
+                                                            // of this source starting, forgive
+                                                            // ONE transient error with a same-URL
+                                                            // retry (a fresh prepare) instead of
+                                                            // hopping away from a source that was
+                                                            // about to play fine. Decode errors
+                                                            // never get the grace (they are
+                                                            // deterministic — a retry would fail
+                                                            // identically). A second error in the
+                                                            // window hops as before.
+                                                            if (SourceSpeed2068.shouldForgiveStartupError(
+                                                                            sourceStartedAtMs,
+                                                                            firstErrorAtMs[0],
+                                                                            System.currentTimeMillis())
+                                                                    && !PlaybackFailure.decoderFallback(
+                                                                            what)
+                                                                    && !ep.media.optBoolean(
+                                                                            "_startupRetry")) {
+                                                                try {
+                                                                    ep.media.put(
+                                                                            "_startupRetry", true);
+                                                                } catch (Exception ignored) {
+                                                                }
+                                                                firstErrorAtMs[0] =
+                                                                        System.currentTimeMillis();
+                                                                a.resumeAt = mp.getCurrentPosition();
+                                                                a.playStatus.setText("載入中…");
+                                                                a.ui.post(
+                                                                        () -> {
+                                                                            if (ticket
+                                                                                    == a.generation)
+                                                                                playerPage(
+                                                                                        a, s, v, ep);
+                                                                        });
+                                                                return true;
+                                                            }
+                                                            // mkoai 2.0.68: this error counts — the
+                                                            // URL failed to play. Drop its cached
+                                                            // probe verdict (a probe "verified"
+                                                            // does not survive a playback failure)
+                                                            // and record the failure for the
+                                                            // cooldown ranking (Maoki next()).
+                                                            SourceSpeed2068.invalidateForUrl(
+                                                                    a,
+                                                                    s.key,
+                                                                    v == null ? null : v.title,
+                                                                    ep == null ? null : ep.name,
+                                                                    ep == null ? null : ep.url);
+                                                            SourceSpeed2068.recordPlaybackFailure(
+                                                                    a, s.key);
                                                             if (v != null
                                                                     && v.lines != null
                                                                     && v.lines.size() > 1

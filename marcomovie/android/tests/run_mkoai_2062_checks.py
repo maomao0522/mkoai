@@ -38,6 +38,18 @@ def read(rel):
         return f.read()
 
 
+def grep_app(pattern):
+    """Count matches of a literal pattern across android/src/main/java (app code only)."""
+    n = 0
+    for base, _dirs, files in os.walk(os.path.join(ROOT, "android/src/main/java")):
+        for fn in files:
+            if not fn.endswith(".java"):
+                continue
+            with open(os.path.join(base, fn), encoding="utf-8") as f:
+                n += f.read().count(pattern)
+    return n
+
+
 def run_jvm_class(classname, extra_args=None):
     """Run one JVM check class; return (passed, failed_names)."""
     cmd = [os.path.join(JDK, "bin/java"), "-Dsun.stdout.encoding=UTF-8"]
@@ -92,7 +104,6 @@ def main():
          os.path.join(SRC, "YoutubeClient.java"),
          os.path.join(SRC, "FanartClient.java"),
          os.path.join(SRC, "TranslateClient.java"),
-         os.path.join(SRC, "SubtitleClient.java"),
          os.path.join(SRC, "PostHogClient.java"),
          os.path.join(SRC, "NotifyClient.java"),
          os.path.join(SRC, "TmdbClient.java"),
@@ -198,24 +209,25 @@ def main():
           "(4) tapping a trailer opens it with ACTION_VIEW (no embedded player)")
     check("trailer_open" in md, "(4) trailer_open event is captured")
 
-    # ---- Static: (5a) subtitles ----
-    sc = read("SubtitleClient.java")
-    check("languages=ZH_BG,EN" in sc, "(5a) subtitle search defaults to ZH_BG,EN")
-    check("is_pack" in sc and "unpack_files" in sc,
-          "(5a) SubDL packs expand to their unpack_files")
-    check("file_id" in sc, "(5a) OpenSubtitles downloads by file_id")
-    check("/api/subtitles/download?provider=subdl&url=" in sc,
-          "(5a) SubDL download passes the search-returned url straight through")
-    check("subtitle_is_archive" in sc and "subtitle_format_unsupported" in sc,
-          "(5a) subtitle download errors are surfaced by error name")
+    # ---- Static: (5a) subtitles — removed in 2.0.68 ----
+    # The user removed the online subtitle feature (2026-11-16 main
+    # chat); the Worker routes are 404 and the secrets are deleted, so
+    # the app must not reference the client or the routes at all.
+    check(not os.path.exists(os.path.join(SRC, "SubtitleClient.java")),
+          "(5a) SubtitleClient.java is deleted (2.0.68 removed online subtitles)")
+    check(grep_app("SubtitleClient") == 0,
+          "(5a) no SubtitleClient reference left in the app code")
+    check(grep_app("/api/subtitles") == 0,
+          "(5a) no /api/subtitles route left in the app code")
     pc = read("PlaybackControls.java")
-    check("搜尋字幕…" in pc, "(5a) player subtitle menu has 搜尋字幕…")
-    check("searchSubtitlesOnline" in pc and "downloadAndMountSubtitle" in pc,
-          "(5a) player has the subtitle search + mount path")
-    check("movie-subtitle-" in pc and ".vtt" in pc,
-          "(5a) downloaded subtitles are cached as .vtt temp files")
-    check("addExternalSubtitle" in pc and "2 * 1024 * 1024" in pc,
-          "(5a) subtitles mount via addExternalSubtitle with a 2MB guard")
+    check("搜尋字幕…" not in pc and "searchSubtitlesOnline" not in pc
+          and "downloadAndMountSubtitle" not in pc,
+          "(5a) the player subtitle menu + search/mount path are gone")
+    check("匯入字幕檔案" in pc and "pickSubtitle()" in pc,
+          "(5a) local subtitle file import is kept (匯入字幕檔案… -> pickSubtitle)")
+    check("addExternalSubtitle" in read("MoviePlayer.java")
+          and "addExternalSubtitle" in read("SourceController.java"),
+          "(5a) MoviePlayer.addExternalSubtitle + the local-import caller survive")
 
     # ---- Static: (5b) translation ----
     tc = read("TranslateClient.java")
@@ -295,9 +307,9 @@ def main():
     for f in ("MainActivity.java", "PlaybackController.java", "GlobalSearchScreen.java",
               "MobileDetailScreen.java", "PlaybackControls.java"):
         events += re.findall(r'PostHogClient\.capture\("([a-z_]+)"', read(f))
-    check(sorted(events) == ["app_open", "subtitle_download", "trailer_open",
+    check(sorted(events) == ["app_open", "trailer_open",
                              "video_play", "video_search"],
-          "(7) exactly the 5 allowed events are captured, nothing else: " + ",".join(sorted(events)))
+          "(7) exactly the 4 allowed events are captured, nothing else: " + ",".join(sorted(events)))
     check("video_play" in read("PlaybackController.java")
           and 'props.put("title"' in read("PlaybackController.java"),
           "(7) video_play sends only the title (no URL or source)")
@@ -444,13 +456,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.67"' in ev and "20068" in ev, "edition-versions.json = 2.0.67 / 20068")
+    check('"2.0.68"' in ev and "20069" in ev, "edition-versions.json = 2.0.68 / 20069")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.67"' in man and 'android:versionCode="20068"' in man,
-          "AndroidManifest.xml = 2.0.67 / 20068")
+    check('android:versionName="2.0.68"' in man and 'android:versionCode="20069"' in man,
+          "AndroidManifest.xml = 2.0.68 / 20069")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

@@ -65,7 +65,6 @@ final class QuotaState2066 {
     // ---- Features (the key is "quota_hide_" + feature) ----
     static final String TRANSLATE = "translate";
     static final String TRAILER = "trailer";
-    static final String SUBTITLE = "subtitle";
     static final String OMDB = "omdb";
     static final String NOTIFY = "notify";
     static final String TRAKT = "trakt";
@@ -73,7 +72,7 @@ final class QuotaState2066 {
     static final String TVMAZE = "tvmaze";
 
     static final String[] FEATURES = {
-        TRANSLATE, TRAILER, SUBTITLE, OMDB, NOTIFY, TRAKT, SIMKL, TVMAZE
+        TRANSLATE, TRAILER, OMDB, NOTIFY, TRAKT, SIMKL, TVMAZE
     };
 
     /** The Worker's DeepL quota error (upstream 456 &rarr; 429, no retry_after). */
