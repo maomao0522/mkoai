@@ -1519,7 +1519,7 @@ final class MobileIosSettings {
                                     a.text(
                                             "mkoai 僅為本地媒體播放與訂閱解析工具，內建不包含任何影視內容資源。請僅匯入您擁有合法授權的訂閱配置與個人網盤內容。",
                                             12f,
-                                            0x8cebebf5);
+                                            0xff9ca3af);
                             legal.setLineSpacing(a.dp(4), 1f);
                             legal.setPadding(a.dp(6), a.dp(10), a.dp(6), a.dp(4));
                             body.addView(legal, new LinearLayout.LayoutParams(-1, -2));
@@ -1543,7 +1543,7 @@ final class MobileIosSettings {
                                                     + "3. 使用者應僅匯入擁有合法授權的內容，並遵守所在地的法律法規，請勿將本 App 用於任何侵權用途。\n\n"
                                                     + "4. 本 App 不對第三方內容的品質、完整性或持續可用性作任何保證；播放中斷、來源失效等情形與本 App 無關。\n\n"
                                                     + "5. 使用本 App 即表示您已閱讀並同意上述聲明。",
-                                            13.5f,
+                                            13f,
                                             0xffe5e7eb);
                             disclaimer.setLineSpacing(a.dp(6), 1f);
                             disclaimer.setPadding(a.dp(6), a.dp(10), a.dp(6), a.dp(4));

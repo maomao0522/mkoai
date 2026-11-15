@@ -28,6 +28,12 @@ import java.util.List;
  *       home/recommendation card shows 「電影」 for a movie and 「劇」 for a
  *       drama/series. Unknown type gets no label rather than a wrong guess.
  *   </li>
+ *   <li>2.0.63 {@link #isAnime(Cms.Video)} / {@link #filterNonAnime} — the
+ *       phone-home hero never headlines anime (animation categories in
+ *       either script). The caller falls back to the unfiltered list when
+ *       the filter would empty the hero (fail-open: showing something
+ *       beats showing nothing).
+ *   </li>
  * </ul>
  *
  * <p>Signals, in priority order ({@link #kindOf}): the TMDB {@code mediaType}
@@ -79,6 +85,32 @@ final class VideoKind2061 {
         List<Cms.Video> out = new ArrayList<>();
         if (in == null) return out;
         for (Cms.Video v : in) if (isRecommendation(v)) out.add(v);
+        return out;
+    }
+
+    /**
+     * mkoai 2.0.63: true when this title is anime — its category / genre /
+     * tag names animation in either script: 动画/動畫， 动漫/動漫， 日漫，
+     * 国漫/國漫. "动画" also covers 动画电影/動畫電影. Only the category
+     * fields are checked (never the title), so a live-action title that
+     * happens to have 動畫 in its name is not dropped. A title with NO
+     * category at all is NOT anime (fail-open — never guess a title away).
+     */
+    static boolean isAnime(Cms.Video v) {
+        if (v == null) return false;
+        String hay = join(v.typeName, v.genre, v.tag);
+        return containsAny(hay,
+                "动画", "動畫",
+                "动漫", "動漫",
+                "日漫",
+                "国漫", "國漫");
+    }
+
+    /** Drop the anime titles (new list; null in → empty out). */
+    static List<Cms.Video> filterNonAnime(List<Cms.Video> in) {
+        List<Cms.Video> out = new ArrayList<>();
+        if (in == null) return out;
+        for (Cms.Video v : in) if (!isAnime(v)) out.add(v);
         return out;
     }
 

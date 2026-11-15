@@ -110,7 +110,8 @@ public final class GlobalSearchScreen implements AutoCloseable {
         emptyResult = null;
         moreResults = null;
         pageTicket = a.generation;
-        a.root.setBackgroundColor(0xff101013);
+        // mkoai 2.0.63: same base as Settings / renderPage (was 0xff101013).
+        a.root.setBackgroundColor(0xff141414);
         if (a.root.getChildAt(0) instanceof ImageLoader.Atmosphere) a.root.removeViewAt(0);
         a.body.setPadding(a.dp(32), a.dp(14), a.dp(32), a.dp(16));
         try {
@@ -1200,7 +1201,10 @@ public final class GlobalSearchScreen implements AutoCloseable {
         LinearLayout card = a.vertical();
         card.setPadding(a.dp(4), a.dp(4), a.dp(4), a.dp(8));
         FrameLayout art = new FrameLayout(a);
-        art.setBackground(a.bg(0xff25252a, 9));
+        // mkoai 2.0.63: same glass card as the home poster cards
+        // (was a flat 0xff25252a, 9dp).
+        art.setBackground(
+                MobileShell.glassBg(0xff1c2421, 0xff141a18, a.dp(12), a.dp(0.6f), 0x26ffffff));
         art.setClipToOutline(true);
         ImageView poster = new ImageView(a);
         poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -1211,7 +1215,9 @@ public final class GlobalSearchScreen implements AutoCloseable {
         a.poster(video.poster, poster);
         // 2.0.40: year bottom-left on the poster (CMS vod_year / XML year).
         MobileShell.addPosterOverlay(a, art, null, video.year);
-        TextView title = a.text(video.title, 14, MainActivity.WHITE);
+        // mkoai 2.0.63: same title as the home poster cards (13sp bold).
+        TextView title = a.text(video.title, 13, 0xfff5f7fa);
+        title.setTypeface(null, Typeface.BOLD);
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         title.setPadding(a.dp(2), a.dp(6), 0, 0);
@@ -1278,7 +1284,10 @@ public final class GlobalSearchScreen implements AutoCloseable {
 
     void showHistory() {
         resultBody.removeAllViews();
-        resultBody.addView(a.text("最近搜尋", 17, MainActivity.WHITE));
+        // mkoai 2.0.63: section headers match the home rows (16sp bold).
+        TextView recentTitle = a.text("最近搜尋", 16, MainActivity.WHITE);
+        recentTitle.setTypeface(null, Typeface.BOLD);
+        resultBody.addView(recentTitle);
         List<String> history = history();
         if (history.isEmpty()) {
             TextView hint =
@@ -1356,7 +1365,9 @@ public final class GlobalSearchScreen implements AutoCloseable {
 
     void renderHotSearches() {
         if (hotSearchCache == null || hotSearchCache.isEmpty()) return;
-        TextView hotTitle = a.text("熱門搜尋", 17, MainActivity.WHITE);
+        // mkoai 2.0.63: section headers match the home rows (16sp bold).
+        TextView hotTitle = a.text("熱門搜尋", 16, MainActivity.WHITE);
+        hotTitle.setTypeface(null, Typeface.BOLD);
         hotTitle.setPadding(0, a.dp(18), 0, a.dp(4));
         resultBody.addView(hotTitle);
         for (String value : hotSearchCache) {

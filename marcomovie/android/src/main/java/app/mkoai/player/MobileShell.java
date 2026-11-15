@@ -1,5 +1,6 @@
 package app.mkoai.player;
 
+import android.animation.ValueAnimator;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -15,6 +16,8 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -131,6 +134,27 @@ final class MobileShell {
     private AmbientCanvasView ambientCanvas;
     // mkoai 2.0.38 (Emby style): hero-following ambient background.
     private HomeAmbient homeAmbientView;
+    // mkoai 2.0.63: tap-vs-swipe for the hero carousel — set by the pager's
+    // touch handling when a gesture proves itself a drag; the hero card's
+    // click listener ignores the tap in that case, so a swipe never opens
+    // the detail page. Reset on every ACTION_DOWN.
+    private boolean heroSwipeDragged;
+
+    // mkoai 2.0.63: hero diffusion (擴散） — the phone-home hero's colours
+    // bleed into the page below (Emby reference). The home ScrollView
+    // background is the current hero's muted + darkened tone; the hero
+    // card's bottom scrim fades into exactly that colour, so there is no
+    // hard edge and no black band. Sampling runs off the UI thread and
+    // never blocks a tap; one tone is cached per hero item.
+    private int heroDiffusionShown = HomeRows2061.HOME_SLATE_BG;
+    private int heroDiffusionTarget = HomeRows2061.HOME_SLATE_BG;
+    private int heroDiffusionPage = -1;
+    private int heroDiffusionGen = 0;
+    private ValueAnimator heroDiffusionAnimator;
+    private final java.util.List<ImageView> heroArtworks = new ArrayList<>();
+    private final java.util.List<View> heroScrims = new ArrayList<>();
+    private final java.util.List<Cms.Video> heroCandidates = new ArrayList<>();
+    private final java.util.Map<String, Integer> heroToneCache = new HashMap<>();
     private LinearLayout floatingDock;
     private final View[] navTabs = new View[5];
     private final TextView[] navLabels = new TextView[5];
@@ -2223,12 +2247,29 @@ final class MobileShell {
     /**
      * Builds the home hero carousel: one full-width big card per page
      * (full-bleed CENTER_CROP poster, centered 27sp title, full-width
-     * white "▶ 播放" button), dot indicator, 8s auto-advance. 2.0.53: the
-     * page is exactly windowWidth — no peek of the next card.
+     * white "▶ 播放" button), dot indicator, 12s slow auto-advance
+     * (900ms glide). 2.0.53: the page is exactly windowWidth — no peek
+     * of the next card. 2.0.63: no anime headlines the hero.
      */
     private View buildHeroCarousel(final Cms.Site site, final List<Cms.Video> candidates) {
-        if (candidates.size() <= 1) return buildHeroShowcaseCard(site, candidates.get(0));
-        final int count = Math.min(5, candidates.size());
+        // mkoai 2.0.63: the hero never headlines anime — drop animation
+        // categories (动画/動畫/动漫/動漫/日漫/国漫/國漫）. Fail-open: if
+        // that would leave the hero empty, keep the original list —
+        // showing something beats showing nothing.
+        List<Cms.Video> heroList = VideoKind2061.filterNonAnime(candidates);
+        if (heroList.isEmpty()) heroList = candidates;
+        // mkoai 2.0.63: record the carousel for hero diffusion — one
+        // artwork + scrim per page, filled in by buildHeroShowcaseCard.
+        heroCandidates.clear();
+        heroCandidates.addAll(heroList);
+        heroArtworks.clear();
+        heroScrims.clear();
+        if (heroList.size() <= 1) {
+            View single = buildHeroShowcaseCard(site, heroList.get(0));
+            applyHeroDiffusion(0);
+            return single;
+        }
+        final int count = Math.min(5, heroList.size());
         // 2.0.53: hero carousel shows exactly one full-width card at a time —
         // no peek of the next card. (Was windowWidth - 32dp, which left a
         // 32dp sliver of the next card visible at the right edge.)
@@ -2245,30 +2286,108 @@ final class MobileShell {
             dots.setContentDescription("推薦 " + (page[0]+1) + " / " + count);
         };
         final HorizontalScrollView pager = new HorizontalScrollView(a) {
+            final float density = a.getResources().getDisplayMetrics().density;
+            final float[] down = {0f, 0f};
+            final boolean[] dragged = {false};
+            final long[] lastManualMs = {0L};
+            android.view.VelocityTracker vt;
+            // mkoai 2.0.63: the slow auto-advance glide in flight (if any).
+            android.animation.ValueAnimator autoAnimator;
             final Runnable advance = new Runnable() {
                 @Override public void run() {
                     android.graphics.Rect visible = new android.graphics.Rect();
                     android.view.accessibility.AccessibilityManager accessibility =
                             (android.view.accessibility.AccessibilityManager) a.getSystemService(Context.ACCESSIBILITY_SERVICE);
-                    if (!touching[0] && isShown() && getGlobalVisibleRect(visible)
+                    // mkoai 2.0.63: after a manual swipe the auto-advance
+                    // stays paused (MANUAL_PAUSE_MS) instead of snatching
+                    // the card back one cycle later.
+                    boolean paused = HeroSwipe2063.shouldPauseAutoAdvance(
+                            System.currentTimeMillis(), lastManualMs[0],
+                            HeroSwipe2063.MANUAL_PAUSE_MS);
+                    if (!paused && !touching[0] && isShown() && getGlobalVisibleRect(visible)
                             && (accessibility == null || !accessibility.isTouchExplorationEnabled())) {
-                        smoothScrollTo(((page[0]+1)%count)*pageWidth, 0);
+                        // mkoai 2.0.63: slow rotation — glide to the next
+                        // card over AUTO_TRANSITION_MS (900ms) instead of
+                        // the default ~250ms snap, so the change is never
+                        // a sudden switch. The manual settle on release
+                        // stays fast (a slow snap would feel laggy).
+                        final int fromX = getScrollX();
+                        final int toX = ((page[0]+1)%count)*pageWidth;
+                        if (autoAnimator != null) autoAnimator.cancel();
+                        autoAnimator = ValueAnimator.ofInt(fromX, toX);
+                        autoAnimator.setDuration(HeroSwipe2063.AUTO_TRANSITION_MS);
+                        autoAnimator.setInterpolator(new android.view.animation.DecelerateInterpolator());
+                        autoAnimator.addUpdateListener(anim ->
+                                scrollTo((Integer) anim.getAnimatedValue(), 0));
+                        autoAnimator.start();
                     }
-                    postDelayed(this, 8000L);
+                    postDelayed(this, HeroSwipe2063.AUTO_ADVANCE_MS);
                 }
             };
-            @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); postDelayed(advance,8000L); }
-            @Override protected void onDetachedFromWindow() { removeCallbacks(advance); super.onDetachedFromWindow(); }
+            @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); postDelayed(advance, HeroSwipe2063.AUTO_ADVANCE_MS); }
+            @Override protected void onDetachedFromWindow() { removeCallbacks(advance); if (autoAnimator != null) autoAnimator.cancel(); super.onDetachedFromWindow(); }
             @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
-                if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { touching[0] = true; removeCallbacks(advance); }
-                boolean handled = super.dispatchTouchEvent(event);
-                if (event.getActionMasked() == android.view.MotionEvent.ACTION_UP
-                        || event.getActionMasked() == android.view.MotionEvent.ACTION_CANCEL) {
+                int action = event.getActionMasked();
+                if (action == android.view.MotionEvent.ACTION_DOWN) {
+                    touching[0] = true;
+                    removeCallbacks(advance);
+                    // mkoai 2.0.63: stop a slow auto-glide in flight — the
+                    // finger takes over from exactly where it is.
+                    if (autoAnimator != null) autoAnimator.cancel();
+                    // mkoai 2.0.63: a fresh gesture is a tap until it proves
+                    // itself a drag — the card click is live again.
+                    heroSwipeDragged = false;
+                    dragged[0] = false;
+                    down[0] = event.getX();
+                    down[1] = event.getY();
+                    if (vt != null) vt.recycle();
+                    vt = android.view.VelocityTracker.obtain();
+                    vt.addMovement(event);
+                } else if (action == android.view.MotionEvent.ACTION_MOVE) {
+                    if (vt != null) vt.addMovement(event);
+                    if (!dragged[0]) {
+                        float dx = event.getX() - down[0];
+                        float dy = event.getY() - down[1];
+                        // mkoai 2.0.63: clearly horizontal — lock the
+                        // vertical parent ScrollView out so the swipe
+                        // follows the finger. Clearly vertical (or still
+                        // undecided): leave the parent alone so the page
+                        // still scrolls. Never disallow on DOWN, or a
+                        // vertical drag starting on the hero could not
+                        // scroll the home page at all.
+                        if (Math.abs(dx) > Math.abs(dy)
+                                && Math.abs(dx) > a.dp(HeroSwipe2063.TAP_SLOP_DP)) {
+                            dragged[0] = true;
+                            heroSwipeDragged = true;
+                            if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+                        }
+                    }
+                } else if (action == android.view.MotionEvent.ACTION_UP
+                        || action == android.view.MotionEvent.ACTION_CANCEL) {
                     touching[0] = false;
-                    post(() -> smoothScrollTo(Math.max(0, Math.min(count-1, Math.round((float)getScrollX()/pageWidth)))*pageWidth,0));
-                    postDelayed(advance,8000L);
+                    float velocityX = 0f;
+                    if (vt != null) {
+                        if (action == android.view.MotionEvent.ACTION_UP) {
+                            vt.addMovement(event);
+                            vt.computeCurrentVelocity(1000);
+                            velocityX = vt.getXVelocity();
+                        }
+                        vt.recycle();
+                        vt = null;
+                    }
+                    // mkoai 2.0.63: a flick changes the page whatever the
+                    // distance; otherwise a tenth of a page of drag is
+                    // enough (was: half a page, then a quarter — a light
+                    // swipe kept snapping back).
+                    final int target = HeroSwipe2063.targetPage(page[0], count,
+                            getScrollX(), pageWidth, velocityX,
+                            HeroSwipe2063.flingThresholdPxPerSec(density));
+                    final boolean manual = dragged[0];
+                    if (manual) lastManualMs[0] = System.currentTimeMillis();
+                    post(() -> smoothScrollTo(target * pageWidth, 0));
+                    postDelayed(advance, HeroSwipe2063.resumeDelayMs(manual));
                 }
-                return handled;
+                return super.dispatchTouchEvent(event);
             }
         };
         pager.setHorizontalScrollBarEnabled(false);
@@ -2276,7 +2395,7 @@ final class MobileShell {
         LinearLayout pages = a.row();
         pager.addView(pages);
         for (int i=0; i<count; i++) {
-            View hero = buildHeroShowcaseCard(site,candidates.get(i));
+            View hero = buildHeroShowcaseCard(site,heroList.get(i));
             pages.addView(hero,new LinearLayout.LayoutParams(pageWidth,-1));
         }
         int height = Math.min(640,Math.max(420,(int)(pageWidth/a.getResources().getDisplayMetrics().density*1.25f)));
@@ -2284,9 +2403,15 @@ final class MobileShell {
         frame.addView(dots,new FrameLayout.LayoutParams(-1,a.dp(24),Gravity.BOTTOM));
         pager.getViewTreeObserver().addOnScrollChangedListener(() -> {
             int next = Math.max(0,Math.min(count-1,Math.round((float)pager.getScrollX()/pageWidth)));
-            if (next != page[0]) { page[0] = next; updateDots.run(); }
+            if (next != page[0]) {
+                page[0] = next;
+                updateDots.run();
+                // mkoai 2.0.63: retint the page for the new hero.
+                applyHeroDiffusion(next);
+            }
         });
         updateDots.run();
+        applyHeroDiffusion(0);
         return frame;
     }
 
@@ -2295,16 +2420,26 @@ final class MobileShell {
         card.setTag("hero-watch-now-button");
         int height = Math.min(640, Math.max(420, (int)(a.windowWidth() / a.getResources().getDisplayMetrics().density * 1.25f)));
         card.setMinimumHeight(a.dp(height));
-        card.setBackgroundColor(0xff141414);
+        // mkoai 2.0.63: the card sits on the diffusion colour, not a black
+        // band — while the artwork is still loading the card already melts
+        // into the page below.
+        card.setBackgroundColor(heroDiffusionTarget);
         ImageView artwork = new ImageView(a);
         artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         card.addView(artwork, new FrameLayout.LayoutParams(-1, -1));
         bindReliablePoster(artwork, featured);
         if (homeAmbientView != null) homeAmbientView.follow(artwork);
+        // mkoai 2.0.63: hero diffusion scrim — transparent over the top
+        // ~60%, fading into the page colour over the bottom ~40%, so the
+        // hero melts into the rows below with no hard edge and no black
+        // band (was: a scrim ending in solid black).
         View gradient = new View(a);
         gradient.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] {0x00000000, 0x25000000, 0xdf141414, 0xff141414}));
+                HeroDiffusion2063.scrimColors(heroDiffusionTarget)));
+        gradient.setTag("hero-diffusion-scrim");
         card.addView(gradient, new FrameLayout.LayoutParams(-1, -1));
+        heroArtworks.add(artwork);
+        heroScrims.add(gradient);
         LinearLayout content = a.vertical();
         content.setGravity(Gravity.CENTER_HORIZONTAL);
         content.setPadding(a.dp(24), a.dp(100), a.dp(24), a.dp(36));
@@ -2337,8 +2472,136 @@ final class MobileShell {
         // mkoai 2.0.61: no ▶ 播放 button on the hero (the reference app
         // has none) — tapping the card still opens the detail page.
         card.addView(content, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
-        card.setOnClickListener(v -> a.openHomeCard(site, featured));
+        card.setOnClickListener(v -> {
+            // mkoai 2.0.63: a swipe is not a tap — when the pager's touch
+            // handling flagged this gesture a drag, ignore the click so a
+            // swipe never opens the detail page. A real tap (no drag) still
+            // opens it; the flag resets on the next ACTION_DOWN.
+            if (heroSwipeDragged) return;
+            a.openHomeCard(site, featured);
+        });
         return card;
+    }
+
+    /**
+     * mkoai 2.0.63: hero diffusion — retint the phone home for hero page
+     * {@code page}. When the page's tone is already cached (one tone per
+     * poster URL), the page background animates to it and the page's scrim
+     * follows. When it is not sampled yet, the current background is held
+     * (no flash back to the slate between heroes) and sampling starts; the
+     * slate fallback only ever shows at first paint, while the first hero
+     * bitmap is still loading. Skipped when the user has a custom
+     * wallpaper (the wallpaper stays visible, same rule as the slate).
+     */
+    private void applyHeroDiffusion(int page) {
+        if (a.prefs.getBoolean(Prefs.WALLPAPER_ENABLED, false)) return;
+        if (page < 0 || page >= heroCandidates.size() || page >= heroArtworks.size()
+                || page >= heroScrims.size()) return;
+        heroDiffusionPage = page;
+        heroDiffusionGen++;
+        final int gen = heroDiffusionGen;
+        Cms.Video v = heroCandidates.get(page);
+        String key = v.poster != null && !v.poster.isEmpty() ? v.poster : "title:" + v.title;
+        Integer cached = heroToneCache.get(key);
+        if (cached != null) {
+            heroDiffusionTarget = cached.intValue();
+            animateHeroBackground(cached.intValue());
+            updateHeroScrim(page, cached.intValue());
+            return;
+        }
+        updateHeroScrim(page, heroDiffusionShown);
+        sampleHeroTone(page, key, gen, 0);
+    }
+
+    /** Smooth 600ms retint of the home ScrollView background. */
+    private void animateHeroBackground(int target) {
+        if (homeScroll == null) {
+            heroDiffusionShown = target;
+            return;
+        }
+        if (heroDiffusionAnimator != null) heroDiffusionAnimator.cancel();
+        final int from = heroDiffusionShown;
+        if (from == target) return;
+        heroDiffusionAnimator = ValueAnimator.ofArgb(from, target);
+        heroDiffusionAnimator.setDuration(600);
+        heroDiffusionAnimator.addUpdateListener(
+                anim -> {
+                    heroDiffusionShown = (int) anim.getAnimatedValue();
+                    if (homeScroll != null) homeScroll.setBackgroundColor(heroDiffusionShown);
+                });
+        heroDiffusionAnimator.start();
+    }
+
+    /** Retint one hero page's bottom-fade scrim (and its card) to {@code color}. */
+    private void updateHeroScrim(int page, int color) {
+        if (page < 0 || page >= heroScrims.size()) return;
+        View scrim = heroScrims.get(page);
+        if (scrim == null) return;
+        scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                HeroDiffusion2063.scrimColors(color)));
+        View parent = (View) scrim.getParent();
+        if (parent != null) parent.setBackgroundColor(color);
+    }
+
+    /** Retries while a hero poster is still decoding (500ms apart, ~4s). */
+    private static final int HERO_TONE_MAX_RETRIES = 8;
+
+    /**
+     * Sample hero page {@code page}'s tone from its already-decoded
+     * artwork. The drawable is read on the UI thread; the scale-down +
+     * average runs on the artwork pool; the result is applied on the UI
+     * thread only if this page is still current (generation-guarded), so
+     * a late bitmap can never recolour a hero the user has already left.
+     * A tap never waits for any of this.
+     */
+    private void sampleHeroTone(final int page, final String key, final int gen, final int attempt) {
+        if (gen != heroDiffusionGen || page != heroDiffusionPage) return;
+        if (page < 0 || page >= heroArtworks.size()) return;
+        final ImageView art = heroArtworks.get(page);
+        if (art == null) return;
+        Drawable d = art.getDrawable();
+        if (!(d instanceof BitmapDrawable)) {
+            // Poster not decoded yet (still the placeholder) — retry
+            // shortly; never blocks a tap.
+            if (attempt < HERO_TONE_MAX_RETRIES) {
+                art.postDelayed(() -> sampleHeroTone(page, key, gen, attempt + 1), 500);
+            }
+            return;
+        }
+        final Bitmap bm = ((BitmapDrawable) d).getBitmap();
+        if (bm == null || bm.isRecycled()) {
+            if (attempt < HERO_TONE_MAX_RETRIES) {
+                art.postDelayed(() -> sampleHeroTone(page, key, gen, attempt + 1), 500);
+            }
+            return;
+        }
+        try {
+            RequestScope.submit(a.artwork, () -> {
+                try {
+                    Bitmap small = Bitmap.createScaledBitmap(bm, 32, 24, true);
+                    if (small == null) return;
+                    int[] px = new int[32 * 24];
+                    small.getPixels(px, 0, 32, 0, 0, 32, 24);
+                    final int tone = HeroDiffusion2063.backgroundTone(
+                            HeroDiffusion2063.averageTone(px, px.length));
+                    small.recycle();
+                    art.post(() -> {
+                        if (gen != heroDiffusionGen || page != heroDiffusionPage) return;
+                        heroToneCache.put(key, tone);
+                        heroDiffusionTarget = tone;
+                        animateHeroBackground(tone);
+                        updateHeroScrim(page, tone);
+                    });
+                } catch (Throwable ignored) {
+                    // Bitmap recycled mid-sample or pool shut down: stay
+                    // on the current background; the next rotation
+                    // re-samples.
+                }
+            });
+        } catch (Throwable ignored) {
+            // Artwork pool shut down (app closing): stay on the current
+            // background.
+        }
     }
 
     private List<VideoFilters.Definition> mobileFilterDefinitions() {
@@ -2789,6 +3052,26 @@ final class MobileShell {
                                         () -> TmdbClient.list(filesDir, row.kind, row.extra));
                         }
                         List<List<TmdbClient.Item>> metadata = BoundedBatch.run(metadataJobs, 4, 12000L);
+                        // mkoai 2.0.63: translate every home-row item that
+                        // still has a foreign title. TMDB rows return
+                        // zh-TW titles, but an item with no zh-TW
+                        // translation stays English — and an English title
+                        // also misses the Chinese availability lookup
+                        // below and the msearch key (tapping it searched
+                        // English and found nothing; only Chinese finds
+                        // it). The fast path inside TitleTranslator makes
+                        // already-Chinese titles free (no network), and
+                        // the batch is globally bounded (5s) so first
+                        // paint never waits long. Chart rows already
+                        // translate at fetch — this pass is a bounded
+                        // retry for the ones that failed there (failures
+                        // are never cached). Runs here on the background
+                        // thread, never the UI thread.
+                        List<TmdbClient.Item> allRowItems = new ArrayList<>();
+                        for (List<TmdbClient.Item> one : metadata) {
+                            if (one != null) allRowItems.addAll(one);
+                        }
+                        TitleTranslator.translateItems(allRowItems, 5000L);
                         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
                             TmdbRow row = rows.get(rowIndex);
                             if (gen != a.generation || req != homeRequest || a.isFinishing()) return;
@@ -3415,21 +3698,25 @@ final class MobileShell {
             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
             art.addView(img, new FrameLayout.LayoutParams(-1, -1));
             bindReliablePoster(img, v);
-            // 2.0.40: year bottom-left on the poster (the subtitle below
-            // keeps showing year + remarks as before).
-            addPosterOverlay(a, art, v.remarks, v.year);
+            // mkoai 2.0.63: the poster overlay keeps only the remarks
+            // badge (same as the home card) — the year used to sit here
+            // AND in the subtitle below, showing twice.
+            addPosterOverlay(a, art, v.remarks, null);
             card.addView(art, new LinearLayout.LayoutParams(-1, a.dp(190)));
             TextView name = a.text(v.title, 13, 0xfff5f7fa);
             name.setTypeface(null, Typeface.BOLD);
-            name.setSingleLine(true);
+            name.setMaxLines(2);
             name.setEllipsize(TextUtils.TruncateAt.END);
             name.setPadding(a.dp(1), a.dp(7), a.dp(1), 0);
             card.addView(name);
-            String sub = "";
-            if (v.year != null && !v.year.isEmpty()) sub = v.year;
-            if (v.remarks != null && !v.remarks.trim().isEmpty()) {
-                sub = sub.isEmpty() ? v.remarks.trim() : sub + " · " + v.remarks.trim();
-            }
+            // mkoai 2.0.63: the subtitle keeps only the year line (same
+            // as the home card) — the remarks now live only on the
+            // poster overlay, so year + rating are no longer duplicated.
+            String sub =
+                    HomeRows2061.yearLine(
+                            v,
+                            java.util.Calendar.getInstance()
+                                    .get(java.util.Calendar.YEAR));
             if (!sub.isEmpty()) {
                 TextView subTv = a.text(sub, 11, 0xff8e959e);
                 subTv.setSingleLine(true);
@@ -4838,7 +5125,7 @@ final class MobileShell {
         LinearLayout row = a.row();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(a.dp(10), a.dp(10), a.dp(12), a.dp(10));
-        row.setBackground(glassBg(0xb81b2320, 0xb8131917, a.dp(16), a.dp(0.7f), 0x26ffffff));
+        row.setBackground(glassBg(0xb81c2421, 0xb8141a18, a.dp(16), a.dp(0.7f), 0x26ffffff));
         MobileDetailScreen.bindTouchFeedback(row);
         row.setOnClickListener(onClick);
 

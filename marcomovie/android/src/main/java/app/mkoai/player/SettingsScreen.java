@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.graphics.*;
 import android.net.Uri;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
@@ -24,34 +25,87 @@ final class SettingsScreen {
         if (a.isTvDevice() && a.scroll instanceof TvScrollView)
             ((TvScrollView) a.scroll).readingMode = true;
         if (!a.isTvDevice()) {
+            // mkoai 2.0.63: Level-2 settings header — flat "‹", "設定"
+            // crumb, 24sp bold title (matches MobileIosSettings). TV
+            // branch below is untouched.
             LinearLayout topNav = a.row();
             topNav.setGravity(Gravity.CENTER_VERTICAL);
-            topNav.setPadding(0, 0, 0, a.dp(14));
+            topNav.setPadding(0, 0, 0, a.dp(12));
             TextView backBtn = a.text("‹", 22, MainActivity.WHITE);
+            backBtn.setTag("settings-back");
             backBtn.setGravity(Gravity.CENTER);
-            backBtn.setBackground(
-                    MobileShell.glassBg(0xb034343a, 0xc01e1e22, a.dp(999), a.dp(0.8f), 0x38ffffff));
+            backBtn.setPadding(0, 0, a.dp(1), a.dp(2));
             MobileDetailScreen.bindTouchFeedback(backBtn);
             backBtn.setOnClickListener(v -> a.onBackPressed());
             LinearLayout.LayoutParams backLp = new LinearLayout.LayoutParams(a.dp(38), a.dp(38));
-            backLp.rightMargin = a.dp(10);
+            backLp.rightMargin = a.dp(12);
             topNav.addView(backBtn, backLp);
-            TextView heading = a.text(title, 22, MainActivity.WHITE);
+            LinearLayout titleStack = a.vertical();
+            TextView crumb = a.text("設定", 11.5f, 0xff9ca3af);
+            crumb.setOnClickListener(v -> a.onBackPressed());
+            titleStack.addView(crumb);
+            TextView heading = a.text(title, 24, MainActivity.WHITE);
             heading.setTypeface(null, Typeface.BOLD);
-            topNav.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+            titleStack.addView(heading);
+            topNav.addView(titleStack, new LinearLayout.LayoutParams(0, -2, 1));
             a.body.addView(topNav, new LinearLayout.LayoutParams(-1, -2));
         } else {
             a.body.addView(a.text(title, 28, MainActivity.WHITE));
             a.gap(a.body, 10);
         }
         if (!note.isEmpty()) {
-            a.paragraph(note);
-            a.gap(a.body, 6);
+            if (a.isTvDevice()) {
+                a.paragraph(note);
+                a.gap(a.body, 6);
+            } else {
+                // mkoai 2.0.63: Level-2 description (13sp muted).
+                TextView desc = a.text(note, 13, 0xff9ca3af);
+                desc.setLineSpacing(a.dp(3), 1f);
+                desc.setPadding(a.dp(2), 0, a.dp(2), a.dp(16));
+                a.body.addView(desc, new LinearLayout.LayoutParams(-1, -2));
+            }
         }
     }
 
     void link(String title, String detail, String key, Runnable action) {
         boolean tv = a.isTvDevice();
+        if (!tv) {
+            // mkoai 2.0.63: flat Level-2 row (matches MobileIosSettings
+            // buildCapsuleRow) — no card background, 24dp plain glyph,
+            // 16sp title, 12sp subtitle, grey chevron. TV falls through
+            // to the card row below, untouched.
+            LinearLayout row = a.row();
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(a.dp(2), a.dp(12), a.dp(2), a.dp(12));
+            SettingsGlyph2063 icon = new SettingsGlyph2063(a, SettingsGlyph2063.kindFor(key, title));
+            LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(a.dp(24), a.dp(24));
+            iconLp.rightMargin = a.dp(14);
+            row.addView(icon, iconLp);
+            LinearLayout copy = a.vertical();
+            TextView t = a.text(title, 16, MainActivity.WHITE);
+            t.setSingleLine(true);
+            t.setEllipsize(TextUtils.TruncateAt.END);
+            copy.addView(t);
+            if (detail != null && !detail.isEmpty()) {
+                TextView caption = a.text(detail, 12, 0xff9ca3af);
+                caption.setMaxLines(2);
+                caption.setEllipsize(TextUtils.TruncateAt.END);
+                caption.setPadding(0, a.dp(2), 0, 0);
+                copy.addView(caption);
+            }
+            row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+            TextView chev = a.text("›", 17, 0xff9ca3af);
+            chev.setPadding(a.dp(8), 0, 0, a.dp(1));
+            row.addView(chev);
+            row.setTag(key);
+            row.setClickable(true);
+            MobileDetailScreen.bindTouchFeedback(row);
+            row.setOnClickListener(v -> action.run());
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, -2);
+            size.bottomMargin = a.dp(10);
+            a.body.addView(row, size);
+            return;
+        }
         LinearLayout row = a.row();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(a.dp(20), a.dp(15), a.dp(20), a.dp(15));
@@ -160,8 +214,15 @@ final class SettingsScreen {
                                 ? "用 Google 或帳號密碼登入後，觀看紀錄與收藏會同步到其他裝置。"
                                 : "用 Google 帳號登入後，觀看紀錄與收藏會同步到其他裝置。"));
         if (signedIn) {
-            a.paragraph("已登入：" + SupabaseAuth.email(a));
-            a.paragraph("上次同步：" + SupabaseSync.lastSyncText(a));
+            // mkoai 2.0.63: Level-2 description style (13sp muted),
+            // not the 16sp paragraph + 14dp gaps.
+            TextView signedInLine = a.text("已登入：" + SupabaseAuth.email(a), 13, 0xff9ca3af);
+            signedInLine.setPadding(a.dp(2), 0, a.dp(2), a.dp(4));
+            a.body.addView(signedInLine, new LinearLayout.LayoutParams(-1, -2));
+            TextView lastSyncLine =
+                    a.text("上次同步：" + SupabaseSync.lastSyncText(a), 13, 0xff9ca3af);
+            lastSyncLine.setPadding(a.dp(2), 0, a.dp(2), a.dp(14));
+            a.body.addView(lastSyncLine, new LinearLayout.LayoutParams(-1, -2));
         }
         for (String key : accountSyncLinkKeys(signedIn, a.isTvDevice())) {
             switch (key) {

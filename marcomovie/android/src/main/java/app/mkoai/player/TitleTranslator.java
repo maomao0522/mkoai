@@ -40,6 +40,12 @@ final class TitleTranslator {
     /** Translate one foreign title to Traditional Chinese; original on failure. */
     static String toTraditional(String foreignTitle) {
         if (foreignTitle == null || foreignTitle.isEmpty()) return foreignTitle;
+        // mkoai 2.0.63: a title with no Latin letters is already Chinese
+        // (or numeric) — nothing to translate, and no network call is
+        // ever spent on it. This fast path is what makes the
+        // translate-every-home-row pass cheap: TMDB rows are mostly
+        // Chinese already, so only the foreign titles reach the network.
+        if (!looksForeign(foreignTitle)) return foreignTitle;
         synchronized (CACHE) {
             String hit = CACHE.get(foreignTitle);
             if (hit != null) return hit;
@@ -71,13 +77,20 @@ final class TitleTranslator {
             }
         }
         synchronized (CACHE) {
-            CACHE.put(foreignTitle, out);
+            // mkoai 2.0.63: only a REAL translation is cached. Caching
+            // the original on failure would poison the session: one slow
+            // or rate-limited lookup (TMDB 429 during the home's parallel
+            // fetch storm) would keep the card English until the app is
+            // restarted, even after the network recovers. A failure stays
+            // uncached, so the next home load retries it.
+            if (!out.equals(foreignTitle)) CACHE.put(foreignTitle, out);
         }
         return out;
     }
 
     /** True when the title contains a Latin letter (an English/romanized title worth a TMDB lookup). */
-    private static boolean looksForeign(String s) {
+    static boolean looksForeign(String s) {
+        if (s == null) return false;
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) return true;
@@ -87,32 +100,142 @@ final class TitleTranslator {
 
     /** Translate a list of titles in parallel, preserving order. */
     static List<String> toTraditionalAll(List<String> titles) {
+        return toTraditionalAll(titles, 8000L);
+    }
+
+    /**
+     * mkoai 2.0.63: batch translation under ONE global budget (was: a
+     * sequential 6s get per title, so ten slow titles could stall a
+     * batch for up to 60s — far past the home's 12s fetch budget).
+     * Titles that do not finish inside the budget keep the original
+     * (fail-open, uncached, retried on the next home load). Never throws.
+     */
+    static List<String> toTraditionalAll(List<String> titles, long budgetMs) {
         List<String> out = new ArrayList<>();
         if (titles == null || titles.isEmpty()) return out;
-        ExecutorService pool = Executors.newFixedThreadPool(Math.min(4, titles.size()));
-        List<Future<String>> futures = new ArrayList<>();
-        for (final String t : titles) {
-            futures.add(
-                    pool.submit(
-                            new Callable<String>() {
-                                @Override
-                                public String call() {
-                                    return toTraditional(t);
-                                }
-                            }));
-        }
-        pool.shutdown();
-        for (Future<String> f : futures) {
-            try {
-                out.add(f.get(6, TimeUnit.SECONDS));
-            } catch (Throwable ignored) {
-                out.add(null);
+        // Daemon threads (like BoundedBatch): a stalled translation must
+        // never hold the process open after the caller has moved on.
+        ExecutorService pool =
+                Executors.newFixedThreadPool(
+                        Math.min(4, titles.size()),
+                        runnable -> {
+                            Thread thread = new Thread(runnable, "mkoai-translate");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
+        try {
+            List<Callable<String>> tasks = new ArrayList<>();
+            for (final String t : titles) {
+                tasks.add(
+                        new Callable<String>() {
+                            @Override
+                            public String call() {
+                                return toTraditional(t);
+                            }
+                        });
             }
+            List<Future<String>> futures;
+            try {
+                futures = pool.invokeAll(tasks, budgetMs, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                for (String t : titles) out.add(t);
+                return out;
+            }
+            for (int i = 0; i < futures.size(); i++) {
+                String r = null;
+                try {
+                    Future<String> f = futures.get(i);
+                    if (!f.isCancelled()) r = f.get();
+                } catch (Throwable ignored) {
+                }
+                out.add(r == null ? titles.get(i) : r);
+            }
+            return out;
+        } finally {
+            pool.shutdownNow();
         }
-        for (int i = 0; i < out.size(); i++) {
-            if (out.get(i) == null) out.set(i, titles.get(i));
+    }
+
+    /**
+     * mkoai 2.0.63: translate home-row items in place (background thread
+     * only — never the UI thread). Only titles with Latin letters reach
+     * the network (see the fast path in {@link #toTraditional}); a title
+     * that cannot be translated keeps its original (fail-open). The
+     * caller builds the video (and its msearch id) from the item AFTER
+     * this call, so display, search key and availability matching all
+     * use the Chinese title. Never throws.
+     */
+    static void translateItems(List<TmdbClient.Item> items, long budgetMs) {
+        if (items == null || items.isEmpty()) return;
+        List<TmdbClient.Item> targets = new ArrayList<>();
+        List<String> titles = new ArrayList<>();
+        for (TmdbClient.Item it : items) {
+            if (it == null || it.title == null || it.title.isEmpty()) continue;
+            if (!looksForeign(it.title)) continue;
+            targets.add(it);
+            titles.add(it.title);
         }
-        return out;
+        if (targets.isEmpty()) return;
+        try {
+            List<String> translated = toTraditionalAll(titles, budgetMs);
+            for (int i = 0; i < targets.size(); i++) {
+                String zh = translated.get(i);
+                if (zh != null && !zh.isEmpty() && !zh.equals(targets.get(i).title)) {
+                    targets.get(i).title = zh;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * mkoai 2.0.63: the video-level twin of {@link #translateItems} —
+     * for row builders that already hold {@link Cms.Video}s (e.g. a TV
+     * chart section). A translated title also rewrites an
+     * {@code msearch:} id, so tapping the card searches the Chinese
+     * title; any other id (a source detail id) is left untouched. Never
+     * throws.
+     */
+    static void translateVideos(List<Cms.Video> videos, long budgetMs) {
+        if (videos == null || videos.isEmpty()) return;
+        List<Cms.Video> targets = new ArrayList<>();
+        List<String> titles = new ArrayList<>();
+        for (Cms.Video v : videos) {
+            if (v == null || v.title == null || v.title.isEmpty()) continue;
+            if (!looksForeign(v.title)) continue;
+            targets.add(v);
+            titles.add(v.title);
+        }
+        if (targets.isEmpty()) return;
+        try {
+            List<String> translated = toTraditionalAll(titles, budgetMs);
+            for (int i = 0; i < targets.size(); i++) {
+                String zh = translated.get(i);
+                Cms.Video v = targets.get(i);
+                if (zh != null && !zh.isEmpty() && !zh.equals(v.title)) {
+                    v.id = rewriteSearchId(v.id, zh);
+                    v.title = zh;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * mkoai 2.0.63: rewrite an {@code msearch:} id to a translated
+     * title; every other id passes through unchanged (a source detail
+     * id must never be rewritten — it is not a search key). Pure, so the
+     * JVM checks cover it directly.
+     */
+    static String rewriteSearchId(String id, String newTitle) {
+        if (id != null
+                && id.startsWith("msearch:")
+                && newTitle != null
+                && !newTitle.isEmpty()) {
+            return "msearch:" + newTitle;
+        }
+        return id;
     }
 
     private static Map<String, String> suggestHeaders() {

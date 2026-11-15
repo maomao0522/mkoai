@@ -1036,7 +1036,8 @@ final class MobileDetailScreen {
                     tvmazeInfo.setVisibility(View.GONE);
                     tvmazeInfo.setPadding(0, a.dp(8), 0, 0);
                     extrasBox.addView(tvmazeInfo, new LinearLayout.LayoutParams(-1, -2));
-                    final TextView translateBtn = a.text("🌐  翻譯簡介", 13, 0xccffffff);
+                    // mkoai 2.0.63: no emoji (zero-emoji design language).
+                    final TextView translateBtn = a.text("翻譯簡介", 13, 0xccffffff);
                     translateBtn.setTag("detail-translate-btn");
                     translateBtn.setGravity(Gravity.CENTER);
                     translateBtn.setPadding(a.dp(8), a.dp(10), a.dp(8), 0);
@@ -3447,31 +3448,14 @@ final class MobileDetailScreen {
     static void updateMetaLine(
             TextView metaLine, Cms.Video v, String siteName, double resolvedDouban) {
         if (metaLine == null) return;
-        double dbScore = resolvedDouban;
-        if (v != null && dbScore < 2.0) {
-            String blob =
-                    (v.remarks == null ? "" : v.remarks)
-                            + " "
-                            + (v.description == null ? "" : v.description);
-            Matcher m =
-                    Pattern.compile("(?:豆瓣|评分|TMDB|IMDb)\\s*[:：]?\\s*([2-9]\\.[0-9])\\s*分?")
-                            .matcher(blob);
-            if (m.find()) {
-                try {
-                    dbScore = Double.parseDouble(m.group(1));
-                } catch (Exception ignored) {
-                }
-            }
-        }
+        // mkoai 2.0.63: the score and the site already show on the
+        // rating badges below (豆瓣 ★ / RT / IMDb / MC + site badge), so
+        // the meta line keeps only year + genre — no duplicates.
+        // (resolvedDouban / siteName stay in the signature so the five
+        // call sites need no change.)
         List<String> parts = new ArrayList<>();
-        if (dbScore >= 2.0 && dbScore <= 10.0) {
-            parts.add(String.format(Locale.US, "★ %.1f", dbScore));
-        }
         if (v != null && v.year != null && !v.year.trim().isEmpty()) {
             parts.add(v.year.trim());
-        }
-        if (siteName != null && !siteName.trim().isEmpty()) {
-            parts.add(siteName.trim());
         }
         if (v != null && v.tag != null && !v.tag.trim().isEmpty()) {
             parts.add(ChineseConvert.s2t(v.tag.trim()));

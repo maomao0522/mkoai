@@ -59,29 +59,35 @@ final class UpdateScreen {
         a.updateScreen = this;
         boolean tv = a.isTvDevice();
 
-        // Top Navigation Bar
+        // Top Navigation Bar (mkoai 2.0.63: Level-2 settings header —
+        // flat "‹", "設定" crumb, 24sp bold title; TV branch below keeps
+        // its own layout).
         if (!tv) {
             LinearLayout topNav = a.row();
             topNav.setGravity(Gravity.CENTER_VERTICAL);
-            topNav.setPadding(0, 0, 0, a.dp(14));
+            topNav.setPadding(0, 0, 0, a.dp(12));
             TextView backBtn = a.text("‹", 22, MainActivity.WHITE);
             backBtn.setGravity(Gravity.CENTER);
-            backBtn.setBackground(
-                    MobileShell.glassBg(0xb034343a, 0xc01e1e22, a.dp(999), a.dp(0.8f), 0x38ffffff));
+            backBtn.setPadding(0, 0, a.dp(1), a.dp(2));
             MobileDetailScreen.bindTouchFeedback(backBtn);
             backBtn.setOnClickListener(v -> a.onBackPressed());
             LinearLayout.LayoutParams backLp = new LinearLayout.LayoutParams(a.dp(38), a.dp(38));
             backLp.rightMargin = a.dp(12);
             topNav.addView(backBtn, backLp);
 
-            TextView heading = a.text("軟體更新", 22, MainActivity.WHITE);
+            LinearLayout titleStack = a.vertical();
+            TextView crumb = a.text("設定", 11.5f, 0xff9ca3af);
+            crumb.setOnClickListener(v -> a.onBackPressed());
+            titleStack.addView(crumb);
+            TextView heading = a.text("軟體更新", 24, MainActivity.WHITE);
             heading.setTypeface(null, Typeface.BOLD);
-            topNav.addView(heading, new LinearLayout.LayoutParams(0, -2, 1f));
+            titleStack.addView(heading);
+            topNav.addView(titleStack, new LinearLayout.LayoutParams(0, -2, 1f));
 
             TextView mirrorBadge = a.text("mkoai 發布渠道", 11.5f, 0xffe34b58);
             mirrorBadge.setTypeface(null, Typeface.BOLD);
             mirrorBadge.setPadding(a.dp(10), a.dp(4), a.dp(10), a.dp(4));
-            mirrorBadge.setBackground(cardSurface(0x2630d158, 0x1a30d158, 999, 0x5534d399));
+            mirrorBadge.setBackground(cardSurface(0x26e34b58, 0x1ae34b58, 999, 0x55e34b58));
             topNav.addView(mirrorBadge, new LinearLayout.LayoutParams(-2, -2));
             a.body.addView(topNav, new LinearLayout.LayoutParams(-1, -2));
         } else {
@@ -94,7 +100,7 @@ final class UpdateScreen {
             TextView mirrorBadge = a.text("mkoai 發布渠道 · 自動校驗簽名", 12.5f, 0xffe34b58);
             mirrorBadge.setTypeface(null, Typeface.BOLD);
             mirrorBadge.setPadding(a.dp(12), a.dp(5), a.dp(12), a.dp(5));
-            mirrorBadge.setBackground(cardSurface(0x2630d158, 0x1a30d158, 999, 0x5534d399));
+            mirrorBadge.setBackground(cardSurface(0x26e34b58, 0x1ae34b58, 999, 0x55e34b58));
             titleRow.addView(mirrorBadge, new LinearLayout.LayoutParams(-2, -2));
             a.body.addView(titleRow, new LinearLayout.LayoutParams(-1, -2));
             a.gap(a.body, 14);
@@ -105,7 +111,8 @@ final class UpdateScreen {
         // =====================================================================
         LinearLayout heroCard = a.vertical();
         heroCard.setPadding(a.dp(20), a.dp(20), a.dp(20), a.dp(20));
-        heroCard.setBackground(cardSurface(0xd81c2421, 0xe6121816, 24, 0x2effffff));
+        // mkoai 2.0.63: neutral dark surface (was a green-tinted dark).
+        heroCard.setBackground(cardSurface(0xd81e1e22, 0xe6191920, 24, 0x2effffff));
 
         LinearLayout headerRow = a.row();
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -115,9 +122,9 @@ final class UpdateScreen {
         GradientDrawable squircle =
                 new GradientDrawable(
                         GradientDrawable.Orientation.TL_BR,
-                        new int[] {0xff1f4739, 0xff0f241d, 0xff091512});
+                        new int[] {0xff26262b, 0xff1a1a1e, 0xff121215});
         squircle.setCornerRadius(a.dp(16));
-        squircle.setStroke(Math.max(1, a.dp(1)), 0x485ac8fa);
+        squircle.setStroke(Math.max(1, a.dp(1)), 0x55e34b58);
         iconBox.setBackground(squircle);
         ImageView logo = new ImageView(a);
         logo.setImageResource(R.drawable.logo_mark);
@@ -253,14 +260,14 @@ final class UpdateScreen {
         secondaryActionBtn.setMinHeight(a.dp(46));
         secondaryActionBtn.setMinimumHeight(a.dp(46));
         secondaryActionBtn.setPadding(a.dp(16), 0, a.dp(16), 0);
-        secondaryActionBtn.setBackground(cardSurface(0xff26312d, 0xff1c2522, 14, 0x2effffff));
+        secondaryActionBtn.setBackground(cardSurface(0xff1e1e22, 0xff191920, 14, 0x2effffff));
         secondaryActionBtn.setOnFocusChangeListener(
                 (v, f) ->
                         FocusMotion.style(
                                 a,
                                 secondaryActionBtn,
                                 f,
-                                0xff26312d,
+                                0xff1e1e22,
                                 MainActivity.WHITE,
                                 14,
                                 0xffe5e7eb,
@@ -280,7 +287,8 @@ final class UpdateScreen {
         // 2. iOS INSET-GROUPED SETTINGS CARD (Automatic Updates & Mirror Policy)
         // =====================================================================
         LinearLayout groupCard = a.vertical();
-        groupCard.setBackground(cardSurface(0xb81b2320, 0xb8131917, 20, 0x26ffffff));
+        // mkoai 2.0.63: neutral dark surface (was a green-tinted dark).
+        groupCard.setBackground(cardSurface(0xb81e1e22, 0xb8191920, 20, 0x26ffffff));
 
         // Row 1: Automatic Update Mode
         LinearLayout modeRow = a.row();

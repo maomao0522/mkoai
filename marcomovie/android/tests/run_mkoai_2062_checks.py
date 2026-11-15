@@ -443,13 +443,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.62"' in ev and "20063" in ev, "edition-versions.json = 2.0.62 / 20063")
+    check('"2.0.63"' in ev and "20064" in ev, "edition-versions.json = 2.0.63 / 20064")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.62"' in man and 'android:versionCode="20063"' in man,
-          "AndroidManifest.xml = 2.0.62 / 20063")
+    check('android:versionName="2.0.63"' in man and 'android:versionCode="20064"' in man,
+          "AndroidManifest.xml = 2.0.63 / 20064")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:
