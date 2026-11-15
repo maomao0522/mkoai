@@ -42,6 +42,7 @@ final class Prefs {
     // auto-selects a source and plays directly, never showing the source
     // picker. OFF: play entries show the 「選擇片源」 list first.
     static final String AUTO_DIRECT_PLAY = "auto_direct_play";
+    static final String FILTER_HLS_ADS = "filter_hls_ads";
     static final String REPEAT_MODE = "repeat_mode";
     static final String SKIP_INTRO = "skip_intro";
     static final String SKIP_OUTRO = "skip_outro";
@@ -135,6 +136,7 @@ final class Prefs {
         BUFFER_SECONDS,
         PLAY_SPEED,
         AUTO_NEXT,
+        FILTER_HLS_ADS,
         REPEAT_MODE,
         SKIP_INTRO,
         SKIP_OUTRO,
@@ -163,6 +165,7 @@ final class Prefs {
                                     REDUCED,
                                     REDUCED_TRANSPARENCY,
                                     AUTO_NEXT,
+                                    FILTER_HLS_ADS,
                                     DANMAKU_DEFAULT,
                                     SOFTWARE_AUDIO,
                                     PREFER_AAC,

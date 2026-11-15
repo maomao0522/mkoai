@@ -900,6 +900,8 @@ final class SettingsScreen {
         // mkoai 2.0.48: 自動選源直接播放（預設開啟）。開：按播放自動選源、
         // 直接播放，絕不跳出選源清單；關：按播放先顯示「選擇片源」。
         toggle("自動選源直接播放", Prefs.AUTO_DIRECT_PLAY, true, null);
+        toggle("略過可辨識的廣告片段", Prefs.FILTER_HLS_ADS, true, null);
+        a.body.addView(a.text("只處理明確標記或來源已設定的廣告段。無法確認時保留原影片；僅適用預設播放器，變更後重新播放生效。", 13, MainActivity.MUTED));
         ints("迴圈", Prefs.REPEAT_MODE, new String[] {"關閉", "單集迴圈", "列表迴圈"}, new int[] {0, 1, 2}, 0);
         int skipIntroSec = Prefs.clampSkipSeconds(a.prefs.getInt(Prefs.SKIP_INTRO, 0));
         link(

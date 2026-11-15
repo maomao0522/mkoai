@@ -33,6 +33,7 @@ public final class Cms {
         public boolean requiresParser;
         public boolean searchable = true;
         public Object ext;
+        public JSONObject hlsAdRules;
 
         public boolean supported() {
             return (type == 0 || type == 1) && isHttp(api);
@@ -690,6 +691,7 @@ public final class Cms {
             s.playUrl = j.optString("playUrl", "");
             s.searchable = j.optInt("searchable", 1) != 0;
             s.ext = j.opt("ext");
+            s.hlsAdRules = j.optJSONObject("hlsAdRules");
             if (origin != null && origin.startsWith("file://") && s.ext instanceof String) {
                 String ext = (String) s.ext;
                 if (ext.startsWith("./") || ext.startsWith("../")) s.ext = resolve(origin, ext);

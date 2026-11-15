@@ -1085,6 +1085,7 @@ final class SourceController {
                             .put("searchable", ns.searchable ? 1 : 0);
             if (ns.jar != null && !ns.jar.isEmpty()) sObj.put("jar", ns.jar);
             if (ns.ext != null) sObj.put("ext", ns.ext);
+            if (ns.hlsAdRules != null) sObj.put("hlsAdRules", ns.hlsAdRules);
             sitesArr.put(sObj);
         }
         String mergedRaw = baseJson.toString(2);

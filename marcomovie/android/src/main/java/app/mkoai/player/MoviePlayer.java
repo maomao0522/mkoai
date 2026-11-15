@@ -72,6 +72,7 @@ public class MoviePlayer {
     private int lastHttpStatus, lastErrorTrack;
     private org.json.JSONObject options = new org.json.JSONObject();
     private DefaultMediaSourceFactory mediaSourceFactory;
+    private androidx.media3.exoplayer.hls.HlsMediaSource.Factory adAwareHlsFactory;
     private String mediaMime;
     private boolean hlsFallbackAttempted;
     private final boolean ijkMode;
@@ -697,6 +698,14 @@ public class MoviePlayer {
                                         .FLAG_IGNORE_SPLICE_INFO_STREAM);
             }
             mediaSourceFactory = new DefaultMediaSourceFactory(data, extractors);
+            org.json.JSONObject adRules = options.optJSONObject("hlsAdRules");
+            boolean filterAds = options.optBoolean("_filterHlsAds",
+                    context.getSharedPreferences(Prefs.FILE, Context.MODE_PRIVATE)
+                            .getBoolean(Prefs.FILTER_HLS_ADS, true));
+            adAwareHlsFactory = filterAds && !options.optBoolean("live", false)
+                    && (adRules == null || adRules.optBoolean("enabled", true))
+                    ? new androidx.media3.exoplayer.hls.HlsMediaSource.Factory(data)
+                        .setPlaylistParserFactory(new AdAwareHlsPlaylistParserFactory(adRules)) : null;
             exo.setMediaSource(playbackSource(address));
             exo.prepare();
         } catch (Exception error) {
@@ -1406,10 +1415,17 @@ public class MoviePlayer {
 
     private androidx.media3.exoplayer.source.MediaSource playbackSource(Uri address)
             throws Exception {
-        androidx.media3.exoplayer.source.MediaSource video =
-                mediaSourceFactory.createMediaSource(mediaItem(address));
         org.json.JSONObject extra = options.optJSONObject("extra");
         String audio = extra == null ? "" : extra.optString("audio");
+        MediaItem item = mediaItem(address);
+        boolean sidecar = item.localConfiguration != null
+                && !item.localConfiguration.subtitleConfigurations.isEmpty();
+        boolean hls = MimeTypes.APPLICATION_M3U8.equalsIgnoreCase(mediaMime)
+                || Util.inferContentType(address) == C.CONTENT_TYPE_HLS;
+        androidx.media3.exoplayer.source.MediaSource video =
+                hls && adAwareHlsFactory != null && !sidecar && !Cms.isHttp(audio)
+                    ? adAwareHlsFactory.createMediaSource(item)
+                    : mediaSourceFactory.createMediaSource(item);
         if (!Cms.isHttp(audio)) return video;
         return new androidx.media3.exoplayer.source.MergingMediaSource(
                 true, video, mediaSourceFactory.createMediaSource(MediaItem.fromUri(audio)));

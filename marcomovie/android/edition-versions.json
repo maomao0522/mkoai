@@ -4,11 +4,11 @@
     "versionName": "0.5.3"
   },
   "android-mobile": {
-    "versionCode": 20059,
-    "versionName": "2.0.58"
+    "versionCode": 20060,
+    "versionName": "2.0.59"
   },
   "android-tv": {
-    "versionCode": 20059,
-    "versionName": "2.0.58"
+    "versionCode": 20060,
+    "versionName": "2.0.59"
   }
 }

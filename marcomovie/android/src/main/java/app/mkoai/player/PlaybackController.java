@@ -1157,6 +1157,8 @@ final class PlaybackController {
                                                             ? Cms.normalizeHttp(ep.url)
                                                             : ep.url),
                                             mediaHeaders);
+                                    if (s != null && s.hlsAdRules != null) ep.media.put("hlsAdRules", s.hlsAdRules);
+                                    ep.media.put("_filterHlsAds", a.prefs.getBoolean(Prefs.FILTER_HLS_ADS, true));
                                     candidate.setOptions(ep.media);
                                     final MoviePlayer ready = candidate;
                                     a.ui.post(
