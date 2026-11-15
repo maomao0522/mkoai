@@ -34,6 +34,18 @@ import java.util.List;
  *       the filter would empty the hero (fail-open: showing something
  *       beats showing nothing).
  *   </li>
+ *   <li>2.0.64 {@link #isAnimeHero} / {@link #filterNonAnimeHero} — the
+ *       same hero rule, plus two signals for candidates the category
+ *       fields cannot classify: the source's own category name resolved
+ *       from the numeric {@code type_id} (a source may omit the
+ *       per-video {@code type_name} while keeping the id — e.g. an
+ *       anime with an empty {@code vod_class}), and — last resort only —
+ *       anime words in the title itself. Both are hero-only: a title
+ *       keyword can misfire (a live-action title that happens to say
+ *       動畫）, but a misfire costs at most one hero candidate and the
+ *       fail-open still guards an empty hero. {@link #isRecommendation}
+ *       and {@link #badgeLabel} never see either signal.
+ *   </li>
  * </ul>
  *
  * <p>Signals, in priority order ({@link #kindOf}): the TMDB {@code mediaType}
@@ -89,21 +101,43 @@ final class VideoKind2061 {
     }
 
     /**
+     * Animation words, either script — one list for the category check
+     * and the hero-only title fallback. 2.0.64 adds the live-found gaps:
+     * 漫剧 (a source files anime under "AI漫剧", which contains none of
+     * the older words), 漫画 / 漫畫 (manga), 卡通 (cartoon). A category
+     * NAMED with one of these words is animation; the title fallback
+     * uses the same list, hero-only.
+     */
+    static final String[] ANIME_WORDS = {
+        "动画", "動畫",
+        "动漫", "動漫",
+        "日漫",
+        "国漫", "國漫",
+        "番剧", "番劇",
+        "新番",
+        "里番",
+        "漫剧",
+        "漫画", "漫畫",
+        "卡通"
+    };
+
+    /**
      * mkoai 2.0.63: true when this title is anime — its category / genre /
      * tag names animation in either script: 动画/動畫， 动漫/動漫， 日漫，
      * 国漫/國漫. "动画" also covers 动画电影/動畫電影. Only the category
      * fields are checked (never the title), so a live-action title that
      * happens to have 動畫 in its name is not dropped. A title with NO
      * category at all is NOT anime (fail-open — never guess a title away).
+     * mkoai 2.0.64: also 番剧/番劇 and 新番 (the CMS words for anime
+     * series that carry no 动画/动漫 at all — e.g. a source that files
+     * anime under "番剧"), and 里番 (adult anime — it must never
+     * headline the hero either); plus 漫剧 (live: a source files anime
+     * under "AI漫剧"), 漫画/漫畫 and 卡通.
      */
     static boolean isAnime(Cms.Video v) {
         if (v == null) return false;
         String hay = join(v.typeName, v.genre, v.tag);
-        return containsAny(hay,
-                "动画", "動畫",
-                "动漫", "動漫",
-                "日漫",
-                "国漫", "國漫");
+        return containsAny(hay, ANIME_WORDS);
     }
 
     /** Drop the anime titles (new list; null in → empty out). */
@@ -111,6 +145,38 @@ final class VideoKind2061 {
         List<Cms.Video> out = new ArrayList<>();
         if (in == null) return out;
         for (Cms.Video v : in) if (!isAnime(v)) out.add(v);
+        return out;
+    }
+
+    /**
+     * mkoai 2.0.64: the hero-only anime check. {@link #isAnime} first;
+     * then the source's own category name for this title's numeric
+     * {@code typeId}, resolved by the caller from the source's cached
+     * category list ({@code typeNames}, type id → name; null/empty when
+     * the cache is not for this site — the check then degrades to
+     * {@link #isAnime}); then — last resort only — the same anime
+     * words in the title itself. The title step is hero-only on
+     * purpose: a live-action title can contain an anime word, but a
+     * misfire costs at most one hero candidate and the caller's
+     * fail-open still guards an empty hero. Never used by
+     * {@link #isRecommendation} or {@link #badgeLabel}.
+     */
+    static boolean isAnimeHero(Cms.Video v, java.util.Map<Integer, String> typeNames) {
+        if (v == null) return false;
+        if (isAnime(v)) return true;
+        if (typeNames != null && v.typeId != 0) {
+            String resolved = typeNames.get(v.typeId);
+            if (resolved != null && containsAny(resolved, ANIME_WORDS)) return true;
+        }
+        return v.title != null && containsAny(v.title, ANIME_WORDS);
+    }
+
+    /** Drop the anime titles by the hero-only check (new list; null in → empty out). */
+    static List<Cms.Video> filterNonAnimeHero(
+            List<Cms.Video> in, java.util.Map<Integer, String> typeNames) {
+        List<Cms.Video> out = new ArrayList<>();
+        if (in == null) return out;
+        for (Cms.Video v : in) if (!isAnimeHero(v, typeNames)) out.add(v);
         return out;
     }
 

@@ -101,6 +101,17 @@ public final class Cms {
         public long releaseTs;
         /** mkoai 2.0.62: TMDB id (0 = unknown). Set by enrichDetailWithTmdb / TmdbClient.toVideo; used for OMDb + Fanart lookups. */
         public int tmdbId;
+        /**
+         * mkoai 2.0.64: the source's numeric category id (0 = unknown).
+         * JSON {@code type_id}, XML {@code <tid>} (falling back to
+         * {@code <type_id>}). A source may omit the per-video category
+         * NAME ({@code type_name} / {@code <type>}) while keeping the
+         * id, so the hero-only anime check resolves it against the
+         * source's cached category list instead. Read ONLY by the hero
+         * path (VideoKind2061.isAnimeHero) — the recommendation page
+         * and the type badge never see it.
+         */
+        public int typeId;
         public final List<Line> lines = new ArrayList<>();
     }
 
@@ -1216,6 +1227,16 @@ public final class Cms {
         return m.find() ? unescapeXml(m.group(1)) : "";
     }
 
+    /** mkoai 2.0.64: a numeric category id, or 0 when it is missing / not a number. */
+    private static int parseTypeId(String s) {
+        if (s == null) return 0;
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
     public static List<Category> categories(String json) throws Exception {
         if (json != null && json.trim().startsWith("<")) {
             List<Category> result = new ArrayList<>();
@@ -1344,6 +1365,10 @@ public final class Cms {
         // 2.0.61 (h)(j): keep the category itself — genre is vod_class
         // when present (genre tags, not the category).
         v.typeName = j.optString("type_name");
+        // mkoai 2.0.64: keep the numeric category id too — the hero-only
+        // anime check resolves it against the source's category list
+        // when the name above is missing.
+        v.typeId = j.optInt("type_id", 0);
         v.actor = j.optString("vod_actor");
         v.director = j.optString("vod_director");
         v.description =
@@ -1370,6 +1395,12 @@ public final class Cms {
         v.tag = xmlTagValue(block, "type");
         // 2.0.61 (h)(j): the XML <type> tag IS the category name.
         v.typeName = v.tag;
+        // mkoai 2.0.64: keep the numeric category id too (<tid>, falling
+        // back to <type_id>) — the hero-only anime check resolves it
+        // against the source's category list when <type> is missing.
+        String tid = xmlTagValue(block, "tid");
+        if (tid.isEmpty()) tid = xmlTagValue(block, "type_id");
+        v.typeId = parseTypeId(tid);
         v.genre = xmlTagValue(block, "vod_class");
         if (v.genre.isEmpty()) v.genre = v.tag;
         v.year = xmlTagValue(block, "year");

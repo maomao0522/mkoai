@@ -146,11 +146,29 @@ final class MobileShell {
     // card's bottom scrim fades into exactly that colour, so there is no
     // hard edge and no black band. Sampling runs off the UI thread and
     // never blocks a tap; one tone is cached per hero item.
+    // mkoai 2.0.64: the background is a vertical bloom, not one flat
+    // colour — the tone at its strongest near the hero, fading outward
+    // into a deeper pass of the same hue further down — so the hero's
+    // colour spills past the image's edges instead of ending at a line.
     private int heroDiffusionShown = HomeRows2061.HOME_SLATE_BG;
     private int heroDiffusionTarget = HomeRows2061.HOME_SLATE_BG;
     private int heroDiffusionPage = -1;
     private int heroDiffusionGen = 0;
     private ValueAnimator heroDiffusionAnimator;
+    /**
+     * mkoai 2.0.64: the page-background bloom — one GradientDrawable,
+     * created once and re-tinted per animation frame (never re-created),
+     * so the home ScrollView background is the bloom instead of a flat
+     * colour. Null until the first diffusion frame paints it.
+     */
+    private android.graphics.drawable.GradientDrawable heroBloomGradient;
+    // mkoai 2.0.64: the phone-home top bar + the top-edge fade follow the
+    // hero diffusion too, so the bar is not a separate dark band. The bar
+    // is rebuilt on every home render (homeTopBar is re-pointed in
+    // buildHomeTopHeaderRow); the fade lives on the app root and outlives
+    // the home tab, so it is only tinted while the home tab is active.
+    private LinearLayout homeTopBar;
+    private TopEdgeFadeView homeTopFade;
     private final java.util.List<ImageView> heroArtworks = new ArrayList<>();
     private final java.util.List<View> heroScrims = new ArrayList<>();
     private final java.util.List<Cms.Video> heroCandidates = new ArrayList<>();
@@ -943,6 +961,9 @@ final class MobileShell {
 
             // Layer 2: Soft top status-bar edge fade (matching iPhone ShaderMask)
             TopEdgeFadeView topFade = new TopEdgeFadeView(a);
+            // mkoai 2.0.64: the fade is retinted with the hero tone while
+            // the home tab is active (see applyDiffusionFrame).
+            homeTopFade = topFade;
             topFade.setClickable(false);
             topFade.setFocusable(false);
             a.root.addView(
@@ -1185,6 +1206,15 @@ final class MobileShell {
             bar.addView(loginPill, lpLp);
         }
 
+        // mkoai 2.0.64: the bar takes the current diffusion tone, so it
+        // reads as part of the same field as the hero and the page —
+        // colour only, layout and buttons unchanged. The first paint uses
+        // the shown tone (the slate until the first hero tone arrives),
+        // which is what the transparent bar showed before, so there is no
+        // flash; the animator keeps it in step from here on.
+        bar.setBackgroundColor(HeroDiffusion2063.topBarTone(heroDiffusionShown));
+        homeTopBar = bar;
+
         return bar;
     }
 
@@ -1325,6 +1355,14 @@ final class MobileShell {
             MobileIosSettings.resetToRoot();
         }
         activeTab = nextTab;
+        // mkoai 2.0.64: the top-edge fade is a status-bar veil for every
+        // tab — it only carries the hero tone on the home tab. Leaving
+        // home restores the fixed near-black base at once (the tab swap
+        // already changes all content, so no animation is needed here);
+        // coming back home retints it through applyHeroDiffusion.
+        if (nextTab != 0 && homeTopFade != null) {
+            homeTopFade.setBaseColor(HeroDiffusion2063.TOP_FADE_FIXED_RGB);
+        }
         a.cancelPageRequests();
         // When on Search tab (1), highlight Home (0) in the 4-tab dock
         int highlightedDockTab = activeTab == 1 ? 0 : activeTab;
@@ -2256,7 +2294,14 @@ final class MobileShell {
         // categories (动画/動畫/动漫/動漫/日漫/国漫/國漫）. Fail-open: if
         // that would leave the hero empty, keep the original list —
         // showing something beats showing nothing.
-        List<Cms.Video> heroList = VideoKind2061.filterNonAnime(candidates);
+        // mkoai 2.0.64: the hero-only check — it also resolves a
+        // candidate's numeric type id against this source's cached
+        // category list (a source may omit the per-video category name
+        // while keeping the id) and, last resort, anime words in the
+        // title. The recommendation page and the type badge never see
+        // either signal.
+        List<Cms.Video> heroList =
+                VideoKind2061.filterNonAnimeHero(candidates, heroTypeNames(site));
         if (heroList.isEmpty()) heroList = candidates;
         // mkoai 2.0.63: record the carousel for hero diffusion — one
         // artwork + scrim per page, filled in by buildHeroShowcaseCard.
@@ -2493,6 +2538,35 @@ final class MobileShell {
      * bitmap is still loading. Skipped when the user has a custom
      * wallpaper (the wallpaper stays visible, same rule as the slate).
      */
+    /**
+     * mkoai 2.0.64: this site's cached category map (numeric type id →
+     * category name) for the hero-only anime check, or null when the
+     * cache is not for this site (site switched, categories not loaded
+     * yet). The hero filter then degrades to the category fields alone
+     * — never a wrong guess, never a crash. The map is built from
+     * {@link #currentCategories}, which the home page-load callback
+     * sets from the same request that fills {@link #currentVideos}, so
+     * it is in place by the time the hero builds.
+     */
+    private java.util.Map<Integer, String> heroTypeNames(Cms.Site site) {
+        if (site == null
+                || site.key == null
+                || !site.key.equals(cachedCategorySiteKey)
+                || currentCategories == null
+                || currentCategories.isEmpty()) return null;
+        java.util.Map<Integer, String> out = new java.util.HashMap<>();
+        for (Cms.Category c : currentCategories) {
+            if (c == null || c.id == null || c.name == null || c.name.isEmpty()) continue;
+            try {
+                int id = Integer.parseInt(c.id.trim());
+                if (id != 0) out.put(id, c.name);
+            } catch (NumberFormatException ignored) {
+                // A non-numeric category id carries no type id to resolve.
+            }
+        }
+        return out.isEmpty() ? null : out;
+    }
+
     private void applyHeroDiffusion(int page) {
         if (a.prefs.getBoolean(Prefs.WALLPAPER_ENABLED, false)) return;
         if (page < 0 || page >= heroCandidates.size() || page >= heroArtworks.size()
@@ -2510,26 +2584,80 @@ final class MobileShell {
             return;
         }
         updateHeroScrim(page, heroDiffusionShown);
+        // mkoai 2.0.64: paint the bloom for the tone shown so far, so the
+        // page is already a bloom (slate → deeper slate) while the poster
+        // is still loading, not a flat slate that jumps when the tone lands.
+        applyDiffusionFrame();
         sampleHeroTone(page, key, gen, 0);
     }
 
-    /** Smooth 600ms retint of the home ScrollView background. */
+    /**
+     * Smooth 600ms retint of the home background. The tone is applied
+     * through {@link #applyDiffusionFrame()} on every frame (and once
+     * when nothing changes — see below), so the ScrollView, the top bar
+     * and the top-edge fade always move together.
+     */
     private void animateHeroBackground(int target) {
         if (homeScroll == null) {
             heroDiffusionShown = target;
+            applyDiffusionFrame();
             return;
         }
         if (heroDiffusionAnimator != null) heroDiffusionAnimator.cancel();
         final int from = heroDiffusionShown;
-        if (from == target) return;
+        if (from == target) {
+            // mkoai 2.0.64: the colour did not change — but the views may
+            // be fresh instances. renderHomeTab rebuilds the ScrollView
+            // (and the top bar) on every return home, and the new
+            // ScrollView is painted slate at construction; if the tone
+            // is already cached, this early return used to leave the new
+            // page slate (the animator never ran, and every rotation hit
+            // the same early return when the shown tone already matched
+            // the target). Paint the current views even when the colour
+            // itself is unchanged.
+            applyDiffusionFrame();
+            return;
+        }
         heroDiffusionAnimator = ValueAnimator.ofArgb(from, target);
         heroDiffusionAnimator.setDuration(600);
         heroDiffusionAnimator.addUpdateListener(
                 anim -> {
                     heroDiffusionShown = (int) anim.getAnimatedValue();
-                    if (homeScroll != null) homeScroll.setBackgroundColor(heroDiffusionShown);
+                    applyDiffusionFrame();
                 });
         heroDiffusionAnimator.start();
+    }
+
+    /**
+     * mkoai 2.0.64: paint one diffusion frame — the home ScrollView
+     * background (the bloom gradient, re-tinted in place), the top bar
+     * background, and the top-edge fade's base colour, all from the
+     * currently shown tone, so the whole top of the home reads as one
+     * field. The fade is only tinted while the home tab is active; on
+     * any other tab it keeps its fixed near-black base (restored by
+     * switchTab), so a late animation frame can never tint the status
+     * veil over the search or settings page. Cheap setColors /
+     * setBackgroundColor / setBaseColor calls only — no new threads, no
+     * new scheduled work, no layout changes. The bloom drawable is
+     * created once and mutated per frame; the ScrollView keeps the same
+     * drawable across rebuilds of its content.
+     */
+    private void applyDiffusionFrame() {
+        if (homeScroll != null) {
+            if (heroBloomGradient == null) {
+                heroBloomGradient =
+                        new android.graphics.drawable.GradientDrawable(
+                                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                                HeroDiffusion2063.bloomColors(heroDiffusionShown));
+            } else {
+                heroBloomGradient.setColors(HeroDiffusion2063.bloomColors(heroDiffusionShown));
+            }
+            homeScroll.setBackground(heroBloomGradient);
+        }
+        if (homeTopBar != null) homeTopBar.setBackgroundColor(heroDiffusionShown);
+        if (homeTopFade != null && activeTab == 0) {
+            homeTopFade.setBaseColor(heroDiffusionShown);
+        }
     }
 
     /** Retint one hero page's bottom-fade scrim (and its card) to {@code color}. */
@@ -2543,8 +2671,18 @@ final class MobileShell {
         if (parent != null) parent.setBackgroundColor(color);
     }
 
-    /** Retries while a hero poster is still decoding (500ms apart, ~4s). */
-    private static final int HERO_TONE_MAX_RETRIES = 8;
+    /**
+     * Retries while a hero poster is still decoding (500ms apart).
+     * 24 retries ≈ 12s — one full auto-rotate cycle. The 2.0.63 window
+     * (8 retries, ~4s) was too short for a cold first load (the Worker
+     * /img proxy + CDN can take longer), and a missed window left the
+     * page on the slate until a rotation re-triggered sampling; a
+     * single-card hero has no rotation at all, so a miss there was
+     * permanent. Same mechanism, just a longer window — still bounded,
+     * and a swipe or a rebuild still stops the retries at once (the
+     * generation guard).
+     */
+    private static final int HERO_TONE_MAX_RETRIES = 24;
 
     /**
      * Sample hero page {@code page}'s tone from its already-decoded
@@ -2848,8 +2986,9 @@ final class MobileShell {
         MobileDetailScreen.bindTouchFeedback(card);
         card.setOnClickListener(view -> a.resumeHistory(e));
         FrameLayout art = new FrameLayout(a);
-        art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), a.dp(0.6f), 0x26ffffff));
+        art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), 0, 0));
         art.setClipToOutline(true);
+        art.setElevation(a.dp(2)); // mkoai 2.0.64: faint shadow edges the card - the 0.6dp glass stroke above is gone (it read as a pasted-on rectangle).
         ImageView img = new ImageView(a);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
         art.addView(img, new FrameLayout.LayoutParams(-1, -1));
@@ -3492,8 +3631,9 @@ final class MobileShell {
         MobileDetailScreen.bindTouchFeedback(card);
         card.setOnClickListener(view -> openTmdbList(site, label, row));
         FrameLayout art = new FrameLayout(a);
-        art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), a.dp(0.6f), 0x26ffffff));
+        art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), 0, 0));
         art.setClipToOutline(true);
+        art.setElevation(a.dp(2)); // mkoai 2.0.64: faint shadow edges the card - the 0.6dp glass stroke above is gone (it read as a pasted-on rectangle).
         if (bg != null) {
             ImageView img = new ImageView(a);
             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -3692,8 +3832,9 @@ final class MobileShell {
             card.setOnClickListener(view -> a.openHomeCard(site, v));
             FrameLayout art = new FrameLayout(a);
             art.setBackground(
-                    glassBg(0xff1c2421, 0xff141a18, a.dp(12), a.dp(0.6f), 0x26ffffff));
+                    glassBg(0xff1c2421, 0xff141a18, a.dp(12), 0, 0));
             art.setClipToOutline(true);
+            art.setElevation(a.dp(2)); // mkoai 2.0.64: faint shadow edges the card - the 0.6dp glass stroke above is gone (it read as a pasted-on rectangle).
             ImageView img = new ImageView(a);
             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
             art.addView(img, new FrameLayout.LayoutParams(-1, -1));
@@ -3838,8 +3979,9 @@ final class MobileShell {
         MobileDetailScreen.bindTouchFeedback(card);
         card.setOnClickListener(view -> a.openHomeCard(site, v));
         FrameLayout art = new FrameLayout(a);
-        art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), a.dp(0.6f), 0x26ffffff));
+        art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), 0, 0));
         art.setClipToOutline(true);
+        art.setElevation(a.dp(2)); // mkoai 2.0.64: faint shadow edges the card - the 0.6dp glass stroke above is gone (it read as a pasted-on rectangle).
         ImageView img = new ImageView(a);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
         art.addView(img, new FrameLayout.LayoutParams(-1, -1));
@@ -4138,8 +4280,9 @@ final class MobileShell {
             card.setOnClickListener(view -> a.openHomeCard(site, v));
 
             FrameLayout art = new FrameLayout(a);
-            art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), a.dp(0.6f), 0x26ffffff));
+            art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), 0, 0));
             art.setClipToOutline(true);
+            art.setElevation(a.dp(2)); // mkoai 2.0.64: faint shadow edges the card - the 0.6dp glass stroke above is gone (it read as a pasted-on rectangle).
 
             ImageView img = new ImageView(a);
             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -7510,9 +7653,22 @@ final class MobileShell {
     /** Soft top-edge gradient veil so scrolling content dissolves gently under the status bar. */
     private static final class TopEdgeFadeView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        // mkoai 2.0.64: the veil's base colour. Fixed near-black by
+        // default (every tab, and the home before the first hero tone);
+        // on the phone home it follows the hero diffusion tone so the
+        // top bar is not a separate dark band. The alphas/stops never
+        // change — only the base colour varies.
+        private int baseRgb = HeroDiffusion2063.TOP_FADE_FIXED_RGB;
 
         TopEdgeFadeView(Context context) {
             super(context);
+        }
+
+        /** Retint the veil to a new base colour (same alphas/stops, new hue). */
+        void setBaseColor(int rgb) {
+            if (baseRgb == rgb) return;
+            baseRgb = rgb;
+            invalidate();
         }
 
         @Override
@@ -7526,7 +7682,7 @@ final class MobileShell {
                             0,
                             0,
                             h,
-                            new int[] {0xd80d1c16, 0x780d1c16, 0x000d1c16},
+                            HeroDiffusion2063.fadeColors(baseRgb),
                             new float[] {0f, 0.58f, 1f},
                             Shader.TileMode.CLAMP));
             canvas.drawRect(0, 0, w, h, paint);

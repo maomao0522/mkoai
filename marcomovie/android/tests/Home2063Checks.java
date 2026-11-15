@@ -6,14 +6,19 @@ package app.mkoai.player;
  *
  * Covers HeroDiffusion2063 — all pure (no Android, no network):
  *  averageTone — uniform colour, transparent pixels ignored, empty
- *      sample falls back to the slate, count clamped to the array
+ *      sample falls back to the slate, count clamped to the array;
+ *      2.0.64: saturation-weighted, so a pale poster with vivid art
+ *      still yields a coloured tone (the flat average washed it grey)
  *  backgroundTone — mute + darken + brightest-channel clamp; expected
  *      values were computed independently (Python) from the formula,
- *      not copied from the Java output
+ *      not copied from the Java output; 2.0.64 keeps 70% of the
+ *      saturation and 65% of the brightness (was 45% / 55%), clamp
+ *      stays 140 as the white-text contrast guard
  *  lerpColor — endpoints, midpoint, t clamped outside 0..1
- *  scrimColors — 6 stops, first four transparent, faint tint at the
- *      fifth, opaque page colour at the sixth (fade over the bottom
- *      ~40% of the hero, ending exactly on the page colour)
+ *  scrimColors — 8 stops, first four transparent, the page colour
+ *      ramping in at 25% / 50% / 75% alpha, opaque page colour at the
+ *      eighth (fade over the bottom ~55% of the hero, ending exactly
+ *      on the page colour)
  *  FALLBACK_BG — the same slate the 2.0.61 home already uses
  * Covers HeroSwipe2063 — all pure:
  *  isTap — 12dp slop, both axes
@@ -92,18 +97,35 @@ public class Home2063Checks {
         eq(HeroDiffusion2063.averageTone(
                         new int[] {0xffffffff, 0xffffffff, 0xff000000}, 3),
                 0xffaaaaaa, "averageTone: white + white + black averages to 170");
+        // ---- averageTone, 2.0.64: saturation-weighted ----
+        eq(HeroDiffusion2063.averageTone(
+                        new int[] {0xffe8f0f0, 0xff2a9d8f}, 2),
+                0xff36a295,
+                "averageTone: a pale pixel + a teal pixel yields teal, not the pale average");
+        eq(HeroDiffusion2063.averageTone(
+                        new int[] {0xffffffff, 0xffffffff, 0xffffffff, 0xff2a9d8f}, 4),
+                0xff2a9d8f,
+                "averageTone: three white pixels + one teal pixel yields the teal (white has no saturation)");
+        eq(HeroDiffusion2063.averageTone(
+                        new int[] {0xffffffff, 0xff000000}, 2),
+                0xff7f7f7f,
+                "averageTone: white + black (no saturation anywhere) falls back to the plain average");
 
-        // ---- backgroundTone ----
+        // ---- backgroundTone ---- (2.0.64: mute 70%, darken 65%, clamp 140)
         eq(HeroDiffusion2063.backgroundTone(0xffffffff),
                 0xff8c8c8c, "backgroundTone: white mutes+darkens to 140 grey");
         eq(HeroDiffusion2063.backgroundTone(0xff000000),
                 0xff000000, "backgroundTone: black stays black");
         eq(HeroDiffusion2063.backgroundTone(0xff6b7683),
-                0xff3e4144, "backgroundTone: the slate itself darkens, keeps its hue");
+                0xff484d53, "backgroundTone: the slate itself darkens, keeps its hue");
         eq(HeroDiffusion2063.backgroundTone(0xffc82828),
-                0xff4e2626, "backgroundTone: saturated red becomes a dark muted red");
+                0xff6d2424, "backgroundTone: saturated red stays a strong dark red (was washed out)");
         eq(HeroDiffusion2063.backgroundTone(0xff78b4dc),
-                0xff52616b, "backgroundTone: bright sky blue becomes a muted slate blue");
+                0xff587486, "backgroundTone: bright sky blue stays a clear slate blue (was washed out)");
+        eq(HeroDiffusion2063.backgroundTone(0xff36a295),
+                0xff30625c, "backgroundTone: a teal poster average stays clearly teal, dark");
+        eq(HeroDiffusion2063.backgroundTone(0xfff2e6c9),
+                0xff8c877b, "backgroundTone: a pale poster lands at 140 grey, keeps its warm hint");
         int pale = HeroDiffusion2063.backgroundTone(0xfff2e6c9);
         check(((pale >> 16) & 0xff) <= 140
                         && ((pale >> 8) & 0xff) <= 140 && (pale & 0xff) <= 140,
@@ -125,18 +147,22 @@ public class Home2063Checks {
         eq(HeroDiffusion2063.lerpColor(0xff6b7683, 0xff4e2626, 0.5f),
                 0xff5d4e55, "lerpColor: slate to muted red at t=0.5");
 
-        // ---- scrimColors ----
+        // ---- scrimColors ---- (2.0.64: 8 stops, tone ramps in)
         int[] scrim = HeroDiffusion2063.scrimColors(0xff112233);
         eq(scrim.length, HeroDiffusion2063.SCRIM_STOPS,
-                "scrimColors: six stops");
+                "scrimColors: eight stops");
         check(scrim[0] == 0x00000000 && scrim[1] == 0x00000000
                         && scrim[2] == 0x00000000 && scrim[3] == 0x00000000,
                 "scrimColors: first four stops fully transparent (fade only at the bottom)");
-        eq(scrim[4], HeroDiffusion2063.SCRIM_TINT,
-                "scrimColors: fifth stop is the faint dark tint");
-        eq(scrim[5], 0xff112233,
+        eq(scrim[4], 0x40112233,
+                "scrimColors: fifth stop is the page colour at 25% alpha");
+        eq(scrim[5], 0x80112233,
+                "scrimColors: sixth stop is the page colour at 50% alpha");
+        eq(scrim[6], 0xc0112233,
+                "scrimColors: seventh stop is the page colour at 75% alpha");
+        eq(scrim[7], 0xff112233,
                 "scrimColors: last stop is exactly the opaque page colour");
-        check(HeroDiffusion2063.scrimColors(0xff6b7683)[5] == 0xff6b7683,
+        check(HeroDiffusion2063.scrimColors(0xff6b7683)[7] == 0xff6b7683,
                 "scrimColors: the fallback slate ends the fade on the slate");
 
         // ---- fallback ----

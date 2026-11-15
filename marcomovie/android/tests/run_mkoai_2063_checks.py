@@ -148,8 +148,10 @@ def main():
           "diffusion: skipped when the user has a custom wallpaper")
     check("heroDiffusionShown" in ms and "heroDiffusionTarget" in ms,
           "diffusion: shown vs target colours tracked separately (no jump mid-animation)")
-    check("homeScroll.setBackgroundColor(heroDiffusionShown)" in ms,
-          "diffusion: the animation retints the home ScrollView background")
+    check("homeScroll.setBackground(heroBloomGradient)" in ms
+          and "bloomColors(heroDiffusionShown)" in ms,
+          "diffusion: the animation retints the home ScrollView bloom "
+          "(one GradientDrawable, re-tinted per frame — not a flat colour)")
 
     # ---- Static: swipe wiring (phone home only) ----
     check("requestDisallowInterceptTouchEvent(true)" in ms,
@@ -195,7 +197,7 @@ def main():
     check('"动画", "動畫"' in vk and '"动漫", "動漫"' in vk
           and '"日漫"' in vk and '"国漫", "國漫"' in vk,
           "anime filter: all six user-named forms matched, both scripts")
-    check("VideoKind2061.filterNonAnime(candidates)" in ms,
+    check("VideoKind2061.filterNonAnimeHero(candidates, heroTypeNames(site))" in ms,
           "anime filter: the carousel filters its candidates at the single choke point")
     check("if (heroList.isEmpty()) heroList = candidates;" in ms,
           "anime filter: fail-open — an all-anime list keeps the original heroes")
@@ -250,11 +252,12 @@ def main():
           "diffusion math: fallback is the 2.0.61 slate")
     check("MUTE_FACTOR" in hd and "DARKEN_FACTOR" in hd and "MAX_BG_CHANNEL = 140" in hd,
           "diffusion math: mute + darken + brightest-channel clamp")
-    check("SCRIM_STOPS = 6" in hd and "SCRIM_TINT" in hd,
-          "diffusion math: 6-stop scrim, faint tint before the opaque page colour")
+    check("SCRIM_STOPS = 8" in hd and "SCRIM_TINT" not in hd
+          and "BLOOM_STOPS = 6" in hd,
+          "diffusion math: 8-stop scrim (tone ramps in), 6-stop bloom, no black tint")
     check("averageTone" in hd and "backgroundTone" in hd and "lerpColor" in hd
-          and "scrimColors" in hd,
-          "diffusion math: all four pure helpers present")
+          and "scrimColors" in hd and "bloomColors" in hd,
+          "diffusion math: all five pure helpers present")
 
     # ---- Static: TV home untouched ----
     hs = read("HomeScreen.java")
@@ -287,13 +290,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.63"' in ev and "20064" in ev, "edition-versions.json = 2.0.63 / 20064")
+    check('"2.0.64"' in ev and "20065" in ev, "edition-versions.json = 2.0.64 / 20065")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.63"' in man and 'android:versionCode="20064"' in man,
-          "AndroidManifest.xml = 2.0.63 / 20064")
+    check('android:versionName="2.0.64"' in man and 'android:versionCode="20065"' in man,
+          "AndroidManifest.xml = 2.0.64 / 20065")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

@@ -23,11 +23,38 @@ package app.mkoai.player;
  * the bitmap is not loaded yet is the existing slate
  * ({@link HomeRows2061#HOME_SLATE_BG}).
  *
- * <p>The hero bottom fade is a 6-stop gradient (evenly spaced stops —
+ * <p>mkoai 2.0.64: the 2.0.63 wash was too faint — the user could see the
+ * background change on rotation, but a strongly teal poster still read as
+ * flat grey. Two causes, both fixed here: (1) the flat per-pixel average
+ * dilutes saturated art with the poster's pale background (a mostly-white
+ * poster averages to near-grey no matter the mute), so {@link #averageTone}
+ * now weights each pixel by its saturation — vivid pixels dominate, pale
+ * pixels barely count; (2) the mute/darken were too strong (55% toward
+ * grey, 55% brightness). The new values keep 70% of the saturation and
+ * 65% of the brightness. The brightest-channel clamp stays 140 on
+ * purpose: it is the white-text contrast guard, and with the new darken
+ * it only ever binds on near-white, hue-less tones (a pure-white poster
+ * still lands at 140 grey, ~3.4:1 for large white text); widening it
+ * would only brighten grey, never add hue. One-line tweak: change
+ * {@link #MUTE_FACTOR} / {@link #DARKEN_FACTOR} / {@link #MAX_BG_CHANNEL}.
+ *
+ * <p>2.0.64 also stops painting the page a single flat colour: the
+ * background is a vertical bloom ({@link #bloomColors}) — the hero tone
+ * at its strongest near the hero, fading outward into a deeper, greyer
+ * pass of the same hue further down — so the hero's colour spills past
+ * the image's edges and the hero dissolves into it instead of ending at
+ * a line. The top bar and the top-edge fade take the same tone (the
+ * bloom's top stop), so the whole top of the home is one field.
+ *
+ * <p>The hero bottom fade is an 8-stop gradient (evenly spaced stops —
  * GradientDrawable has no public stop-position API below API 29, so the
  * fade is shaped with the stops themselves): the top four stops are fully
- * transparent, the fifth is a faint dark tint, the sixth is the opaque
- * page colour — so the fade covers roughly the bottom 40% of the hero.
+ * transparent, the next three ramp the page colour in at 25% / 50% /
+ * 75% alpha, the last is the opaque page colour — so the fade covers
+ * roughly the bottom 55% of the hero and the image dissolves into the
+ * page instead of ending at a line. (2.0.63 used 6 stops with a faint
+ * black tint; the visible fade was only the bottom ~15% and read as a
+ * hard edge.)
  */
 final class HeroDiffusion2063 {
     private HeroDiffusion2063() {}
@@ -35,26 +62,89 @@ final class HeroDiffusion2063 {
     /** Fallback page background while the hero bitmap is not loaded yet. */
     static final int FALLBACK_BG = 0xff6b7683;
 
-    /** Desaturation: 0 = full grey, 1 = original saturation. */
-    static final float MUTE_FACTOR = 0.45f;
+    /** Desaturation: 0 = full grey, 1 = original saturation. 2.0.64: 0.70 (was 0.45). */
+    static final float MUTE_FACTOR = 0.70f;
 
-    /** Brightness scale applied after muting. */
-    static final float DARKEN_FACTOR = 0.55f;
+    /** Brightness scale applied after muting. 2.0.64: 0.65 (was 0.55). */
+    static final float DARKEN_FACTOR = 0.65f;
 
-    /** Brightest channel a derived background may keep (white text stays readable). */
+    /**
+     * Brightest channel a derived background may keep (white text stays
+     * readable). 2.0.64: deliberately UNCHANGED at 140 — with the new
+     * darken it only binds on near-white, hue-less tones (a pure-white
+     * poster still lands at 140 grey); widening it would only brighten
+     * grey and drop white-text contrast below ~3:1, never add hue. The
+     * hue now comes from the saturation-weighted average + gentler mute.
+     */
     static final int MAX_BG_CHANNEL = 140;
 
-    /** Number of stops in the hero bottom-fade gradient. */
-    static final int SCRIM_STOPS = 6;
+    /** Number of stops in the hero bottom-fade gradient. 2.0.64: 8 (was 6). */
+    static final int SCRIM_STOPS = 8;
 
-    /** Faint dark tint at the second-to-last scrim stop (keeps hero text legible). */
-    static final int SCRIM_TINT = 0x1e000000;
+    /**
+     * Number of stops in the page-background bloom gradient
+     * ({@link #bloomColors}): the tone holds for the top three stops
+     * (roughly the hero's height), then fades through the midpoint to
+     * the far colour at the bottom.
+     */
+    static final int BLOOM_STOPS = 6;
+
+    /**
+     * The top-edge fade's fixed base colour (the near-black the 2.0.38
+     * status-bar veil always used). It stays the fade's colour on every
+     * tab except the phone home, and on the home before the first hero
+     * tone arrives — so the first paint is exactly today's look.
+     */
+    static final int TOP_FADE_FIXED_RGB = 0x0d1c16;
+
+    /**
+     * mkoai 2.0.64: the phone-home top bar's background for page tone
+     * {@code pageTone} — the page tone itself, no extra darkening. The
+     * tone is already muted (30% toward grey) + darkened (35%) with its
+     * brightest channel clamped to {@link #MAX_BG_CHANNEL} (140), which
+     * is the same readability guarantee the page's own white text
+     * already relies on — and the bar's foreground is the same
+     * white/light glass (logo, ▶ pill, search / ⋯ / history circles,
+     * account initial). A second darken would only re-open a seam
+     * between the bar and the page it is meant to join, so the bar
+     * reads as one continuous field with the hero and the rows below.
+     * The input is always a {@link #backgroundTone} output (or the
+     * slate fallback), never a raw poster average.
+     */
+    static int topBarTone(int pageTone) {
+        return pageTone;
+    }
+
+    /**
+     * mkoai 2.0.64: the three gradient stops for a top-edge fade with
+     * base colour {@code baseRgb} — 84% opaque at the top, 47% at 58%
+     * of the height, transparent at the bottom. The alphas and stops
+     * are the 2.0.38 fade's; only the base colour varies, so
+     * {@code fadeColors(TOP_FADE_FIXED_RGB)} reproduces the original
+     * veil exactly ({@code 0xd80d1c16, 0x780d1c16, 0x000d1c16}).
+     * The input is masked to 24-bit RGB: callers pass the opaque ARGB
+     * hero tone, and without the mask its 0xff alpha would OR into
+     * every stop and turn the veil into a solid band.
+     */
+    static int[] fadeColors(int baseRgb) {
+        int rgb = baseRgb & 0x00ffffff;
+        return new int[] {0xd8000000 | rgb, 0x78000000 | rgb, 0x00000000 | rgb};
+    }
 
     /**
      * Average tone of the sampled pixels (opaque ARGB). Fully transparent
      * pixels are ignored; an empty sample (or no opaque pixel at all)
      * returns {@link #FALLBACK_BG}. Only the first {@code count} entries
      * are read (clamped to the array length).
+     *
+     * <p>mkoai 2.0.64: saturation-weighted, not flat. Each pixel is
+     * weighted by its saturation (brightest minus darkest channel), so
+     * the poster's vivid art sets the tone and its pale background
+     * barely counts — a flat average dilutes a teal poster with its
+     * white background down to grey, which is exactly why the 2.0.63
+     * diffusion read as flat grey. When every sampled pixel is
+     * grey/white/black (total weight zero) the plain average is used,
+     * so a black-and-white poster still yields its honest grey.
      */
     static int averageTone(int[] pixels, int count) {
         if (pixels == null || pixels.length == 0 || count <= 0) return FALLBACK_BG;
@@ -62,26 +152,48 @@ final class HeroDiffusion2063 {
         long r = 0;
         long g = 0;
         long b = 0;
+        long weight = 0;
+        long pr = 0;
+        long pg = 0;
+        long pb = 0;
         int seen = 0;
         for (int i = 0; i < n; i++) {
             int px = pixels[i];
             if ((px >>> 24) == 0) continue;
-            r += (px >> 16) & 0xff;
-            g += (px >> 8) & 0xff;
-            b += px & 0xff;
+            int cr = (px >> 16) & 0xff;
+            int cg = (px >> 8) & 0xff;
+            int cb = px & 0xff;
+            int sat = Math.max(cr, Math.max(cg, cb)) - Math.min(cr, Math.min(cg, cb));
+            r += (long) cr * sat;
+            g += (long) cg * sat;
+            b += (long) cb * sat;
+            weight += sat;
+            pr += cr;
+            pg += cg;
+            pb += cb;
             seen++;
         }
         if (seen == 0) return FALLBACK_BG;
-        int ar = (int) (r / seen);
-        int ag = (int) (g / seen);
-        int ab = (int) (b / seen);
+        int ar;
+        int ag;
+        int ab;
+        if (weight == 0) {
+            // No saturated pixel at all — the plain average is the tone.
+            ar = (int) (pr / seen);
+            ag = (int) (pg / seen);
+            ab = (int) (pb / seen);
+        } else {
+            ar = (int) (r / weight);
+            ag = (int) (g / weight);
+            ab = (int) (b / weight);
+        }
         return 0xff000000 | (ar << 16) | (ag << 8) | ab;
     }
 
     /**
      * Mute + darken a sampled tone into a page background colour (opaque
-     * ARGB): each channel is pulled 55% of the way toward the grey mean,
-     * scaled to 55% brightness, then clamped so the brightest channel is
+     * ARGB): each channel is pulled 30% of the way toward the grey mean,
+     * scaled to 65% brightness, then clamped so the brightest channel is
      * at most {@link #MAX_BG_CHANNEL}. A pale or saturated poster can
      * therefore only ever yield a dark muted tone.
      */
@@ -124,12 +236,44 @@ final class HeroDiffusion2063 {
 
     /**
      * The hero bottom-fade scrim colours for page colour {@code bg}:
-     * four transparent stops, a faint dark tint, then the opaque page
-     * colour — with evenly spaced stops the fade covers roughly the
-     * bottom 40% of the hero and ends exactly on the page colour, so
-     * there is no hard edge and no black band between hero and rows.
+     * four transparent stops, then the page colour ramping in at 25% /
+     * 50% / 75% alpha, then the opaque page colour — with evenly spaced
+     * stops the fade covers roughly the bottom 55% of the hero and ends
+     * exactly on the page colour, so the hero dissolves into the page
+     * with no hard edge and no black band between hero and rows. The
+     * ramp is the page colour itself (not a black tint), so the image
+     * melts into the bloom rather than darkening into black first.
      */
     static int[] scrimColors(int bg) {
-        return new int[] {0x00000000, 0x00000000, 0x00000000, 0x00000000, SCRIM_TINT, bg};
+        int rgb = bg & 0x00ffffff;
+        return new int[] {
+            0x00000000,
+            0x00000000,
+            0x00000000,
+            0x00000000,
+            0x40000000 | rgb,
+            0x80000000 | rgb,
+            0xc0000000 | rgb,
+            bg
+        };
+    }
+
+    /**
+     * mkoai 2.0.64: the page-background bloom for page tone {@code bg} —
+     * the diffusion is not one flat colour but a vertical fade that
+     * weakens outward from the hero: the tone holds for the top three
+     * stops (roughly the hero's height, so the hero's bottom edge sits
+     * on its own colour), then fades through the midpoint into the far
+     * colour at the bottom. The far colour is the tone diffused once
+     * more ({@link #backgroundTone} applied to the tone itself) — a
+     * deeper, greyer pass of the same hue, never grey and never black —
+     * so the bloom fades outward without ever leaving the hero's colour
+     * family. The top bar takes the same tone (the bloom's top stop),
+     * so bar, hero and page are one continuous field.
+     */
+    static int[] bloomColors(int bg) {
+        int far = backgroundTone(bg);
+        int mid = lerpColor(bg, far, 0.5f);
+        return new int[] {bg, bg, bg, mid, far, far};
     }
 }
