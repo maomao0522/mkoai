@@ -154,6 +154,12 @@ final class MobileShell {
     private int heroDiffusionTarget = HomeRows2061.HOME_SLATE_BG;
     private int heroDiffusionPage = -1;
     private int heroDiffusionGen = 0;
+    // mkoai 2.0.65: the bloom's tone hold, as a fraction of the
+    // viewport height — the hero's bottom edge at rest (see
+    // HeroDiffusion2063.heroBottomFraction). Recomputed every time the
+    // carousel is rebuilt; the animator tints the bloom from it so the
+    // rest state already looks like the scrolled state.
+    private float heroDiffusionHoldFraction = 0.40f;
     private ValueAnimator heroDiffusionAnimator;
     /**
      * mkoai 2.0.64: the page-background bloom — one GradientDrawable,
@@ -171,6 +177,11 @@ final class MobileShell {
     private TopEdgeFadeView homeTopFade;
     private final java.util.List<ImageView> heroArtworks = new ArrayList<>();
     private final java.util.List<View> heroScrims = new ArrayList<>();
+    // mkoai 2.0.65: the hero TOP fades — one per carousel page, in the
+    // same order as heroScrims. Each lays the page tone over the top of
+    // its artwork so the top bar melts into the hero (the mirror of the
+    // bottom scrim); re-tinted with the scrim in updateHeroScrim.
+    private final java.util.List<View> heroTopFades = new ArrayList<>();
     private final java.util.List<Cms.Video> heroCandidates = new ArrayList<>();
     private final java.util.Map<String, Integer> heroToneCache = new HashMap<>();
     private LinearLayout floatingDock;
@@ -2309,6 +2320,19 @@ final class MobileShell {
         heroCandidates.addAll(heroList);
         heroArtworks.clear();
         heroScrims.clear();
+        heroTopFades.clear();
+        // mkoai 2.0.65: anchor the bloom's tone hold to the hero's
+        // bottom edge at rest (see HeroDiffusion2063.heroBottomFraction)
+        // — the rest state then looks like the scrolled state, because
+        // scrolling only moves the hero's bottom edge up, deeper into
+        // the pure-tone zone. The carousel page is max(240dp, the
+        // window width), so the window width is the page width here.
+        float density = a.getResources().getDisplayMetrics().density;
+        heroDiffusionHoldFraction = HeroDiffusion2063.heroBottomFraction(
+                statusBarHeight() / density,
+                HeroDiffusion2063.HOME_TOP_BAR_HEIGHT_DP,
+                HeroDiffusion2063.heroHeightDp(a.windowWidth() / density),
+                a.windowHeight() / density);
         if (heroList.size() <= 1) {
             View single = buildHeroShowcaseCard(site, heroList.get(0));
             applyHeroDiffusion(0);
@@ -2485,6 +2509,20 @@ final class MobileShell {
         card.addView(gradient, new FrameLayout.LayoutParams(-1, -1));
         heroArtworks.add(artwork);
         heroScrims.add(gradient);
+        // mkoai 2.0.65: hero TOP fade — the mirror of the bottom scrim.
+        // The top bar is a flat band of the page tone sitting directly
+        // above the artwork, so without this the bar's bottom edge reads
+        // as a line against the photo's top edge. The fade lays the page
+        // tone over the top of the artwork (opaque at the top, gone by
+        // ~43% of the hero's height), so the photo emerges out of the
+        // bar's own colour; the content (bottom-gravity, title block at
+        // the bottom) is added after it and draws above it.
+        View topFade = new View(a);
+        topFade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                HeroDiffusion2063.topFadeColors(heroDiffusionTarget)));
+        topFade.setTag("hero-diffusion-topfade");
+        card.addView(topFade, new FrameLayout.LayoutParams(-1, -1));
+        heroTopFades.add(topFade);
         LinearLayout content = a.vertical();
         content.setGravity(Gravity.CENTER_HORIZONTAL);
         content.setPadding(a.dp(24), a.dp(100), a.dp(24), a.dp(36));
@@ -2648,9 +2686,17 @@ final class MobileShell {
                 heroBloomGradient =
                         new android.graphics.drawable.GradientDrawable(
                                 android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                                HeroDiffusion2063.bloomColors(heroDiffusionShown));
+                                // mkoai 2.0.65: anchored to the hero's
+                                // bottom edge at rest
+                                // (heroDiffusionHoldFraction) — the tone
+                                // holds until the hero ends, then fades
+                                // outward, so the rest state already looks
+                                // like the scrolled state.
+                                HeroDiffusion2063.bloomColorsAnchored(
+                                        heroDiffusionShown, heroDiffusionHoldFraction));
             } else {
-                heroBloomGradient.setColors(HeroDiffusion2063.bloomColors(heroDiffusionShown));
+                heroBloomGradient.setColors(HeroDiffusion2063.bloomColorsAnchored(
+                        heroDiffusionShown, heroDiffusionHoldFraction));
             }
             homeScroll.setBackground(heroBloomGradient);
         }
@@ -2669,6 +2715,15 @@ final class MobileShell {
                 HeroDiffusion2063.scrimColors(color)));
         View parent = (View) scrim.getParent();
         if (parent != null) parent.setBackgroundColor(color);
+        // mkoai 2.0.65: the top fade follows the same colour, so the
+        // bar-to-hero seam stays invisible when the hero changes. The
+        // top-fade list is parallel to the scrim list (same size, same
+        // order), so the guard above covers it too.
+        if (page < heroTopFades.size()) {
+            View topFade = heroTopFades.get(page);
+            if (topFade != null) topFade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                    HeroDiffusion2063.topFadeColors(color)));
+        }
     }
 
     /**

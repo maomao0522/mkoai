@@ -112,7 +112,8 @@ final class UpdateScreen {
         LinearLayout heroCard = a.vertical();
         heroCard.setPadding(a.dp(20), a.dp(20), a.dp(20), a.dp(20));
         // mkoai 2.0.63: neutral dark surface (was a green-tinted dark).
-        heroCard.setBackground(cardSurface(0xd81e1e22, 0xe6191920, 24, 0x2effffff));
+        // mkoai 2.0.65: phone Material — flat, no card (TV keeps the card).
+        if (tv) heroCard.setBackground(cardSurface(0xd81e1e22, 0xe6191920, 24, 0x2effffff));
 
         LinearLayout headerRow = a.row();
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -227,7 +228,7 @@ final class UpdateScreen {
         primaryBtn.setTextColor(MainActivity.WHITE);
         primaryBtn.setMinHeight(a.dp(46));
         primaryBtn.setMinimumHeight(a.dp(46));
-        primaryBtn.setBackground(a.bg(0xffe34b58, 14));
+        primaryBtn.setBackground(a.bg(0xffe34b58, tv ? 14 : 999));
         primaryBtn.setOnFocusChangeListener(
                 (v, f) ->
                         FocusMotion.style(
@@ -236,7 +237,7 @@ final class UpdateScreen {
                                 f,
                                 0xffe34b58,
                                 MainActivity.WHITE,
-                                14,
+                                tv ? 14 : 999,
                                 MainActivity.WHITE,
                                 MainActivity.DARK,
                                 false,
@@ -260,16 +261,21 @@ final class UpdateScreen {
         secondaryActionBtn.setMinHeight(a.dp(46));
         secondaryActionBtn.setMinimumHeight(a.dp(46));
         secondaryActionBtn.setPadding(a.dp(16), 0, a.dp(16), 0);
-        secondaryActionBtn.setBackground(cardSurface(0xff1e1e22, 0xff191920, 14, 0x2effffff));
+        // mkoai 2.0.65: phone Material — transparent with a faint outline
+        // (TV keeps the dark card surface).
+        secondaryActionBtn.setBackground(
+                tv
+                        ? cardSurface(0xff1e1e22, 0xff191920, 14, 0x2effffff)
+                        : cardSurface(0x00000000, 0x00000000, 999, 0x55ffffff));
         secondaryActionBtn.setOnFocusChangeListener(
                 (v, f) ->
                         FocusMotion.style(
                                 a,
                                 secondaryActionBtn,
                                 f,
-                                0xff1e1e22,
+                                tv ? 0xff1e1e22 : 0x00000000,
                                 MainActivity.WHITE,
-                                14,
+                                tv ? 14 : 999,
                                 0xffe5e7eb,
                                 MainActivity.DARK,
                                 false,
@@ -288,7 +294,8 @@ final class UpdateScreen {
         // =====================================================================
         LinearLayout groupCard = a.vertical();
         // mkoai 2.0.63: neutral dark surface (was a green-tinted dark).
-        groupCard.setBackground(cardSurface(0xb81e1e22, 0xb8191920, 20, 0x26ffffff));
+        // mkoai 2.0.65: phone Material — flat, no card (TV keeps the card).
+        if (tv) groupCard.setBackground(cardSurface(0xb81e1e22, 0xb8191920, 20, 0x26ffffff));
 
         // Row 1: Automatic Update Mode
         LinearLayout modeRow = a.row();

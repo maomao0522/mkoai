@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# mkoai 2.0.64 checks — real-code JVM checks + static regression checks.
+# mkoai 2.0.65 checks — real-code JVM checks + static regression checks.
 # Runs Home2064Checks (HeroDiffusion2063.bloomColors — the page
 # background is a vertical bloom from the hero tone down into a deeper
 # pass of the same hue; topBarTone / fadeColors unchanged; the hero-only
@@ -106,7 +106,7 @@ def main():
          os.path.join(SRC, "MobileShell.java"),
          os.path.join(ROOT, "android/tests/Home2064Checks.java")],
         text=True, capture_output=True, timeout=300)
-    check(jc.returncode == 0, "JVM compile of 2.0.64 sources + Home2064Checks")
+    check(jc.returncode == 0, "JVM compile of 2.0.65 sources + Home2064Checks")
     if jc.returncode != 0:
         print(jc.stderr[-3000:])
         print(f"\n{TOTAL - len(FAILED)}/{TOTAL} passed; {len(FAILED)} failures: {FAILED}")
@@ -127,8 +127,9 @@ def main():
     check("heroBloomGradient" in ms
           and "homeScroll.setBackground(heroBloomGradient)" in ms,
           "bloom: the ScrollView background is the one bloom drawable")
-    check("heroBloomGradient.setColors(HeroDiffusion2063.bloomColors(heroDiffusionShown))" in ms,
-          "bloom: every animation frame re-tints the same drawable, never re-creates it")
+    check("heroBloomGradient.setColors(HeroDiffusion2063.bloomColorsAnchored(" in ms,
+          "bloom: every animation frame re-tints the same drawable, never re-creates it "
+          "(mkoai 2.0.65: anchored to the hero's bottom edge)")
     check("MUTE_FACTOR = 0.70f" in hd and "DARKEN_FACTOR = 0.65f" in hd
           and "MAX_BG_CHANNEL = 140" in hd,
           "bloom math: mute 70% / darken 65% / clamp 140 (the clamp stays the contrast guard)")
@@ -195,7 +196,7 @@ def main():
         text = read(rel)
         check("HeroDiffusion2063" not in text and "bloomColors" not in text
               and "isAnimeHero" not in text,
-              "settings untouched: no 2.0.64 diffusion or hero code in " + rel)
+              "settings untouched: no 2.0.65 diffusion or hero code in " + rel)
 
     # ---- Static: secret audit (changed files) ----
     for rel in ("HeroDiffusion2063.java", "VideoKind2061.java", "Cms.java", "MobileShell.java"):
@@ -205,13 +206,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.64"' in ev and "20065" in ev, "edition-versions.json = 2.0.64 / 20065")
+    check('"2.0.65"' in ev and "20066" in ev, "edition-versions.json = 2.0.65 / 20066")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.64"' in man and 'android:versionCode="20065"' in man,
-          "AndroidManifest.xml = 2.0.64 / 20065")
+    check('android:versionName="2.0.65"' in man and 'android:versionCode="20066"' in man,
+          "AndroidManifest.xml = 2.0.65 / 20066")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

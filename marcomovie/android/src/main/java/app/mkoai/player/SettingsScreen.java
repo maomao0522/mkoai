@@ -797,6 +797,8 @@ final class SettingsScreen {
 
     void appearance() {
         page("首頁與桌布", "介面按螢幕解析度自動適配，海報保持 2:3 比例。");
+        // mkoai 2.0.65: Material section titles (phone only; no-op on TV).
+        sectionTitle("顯示");
         link(
                 "介面大小",
                 TvLayoutPolicy.percent(a.prefs.getInt(Prefs.UI_SCALE_PERCENT, 100))
@@ -855,6 +857,7 @@ final class SettingsScreen {
                 new String[] {"最多 5 張 · 舒展", "最多 6 張", "最多 7 張", "最多 8 張"},
                 new int[] {5, 6, 7, 8},
                 5);
+        sectionTitle("首頁");
         link(
                 "首頁桌布",
                 a.prefs.getBoolean(Prefs.WALLPAPER_ENABLED, false)
@@ -865,6 +868,7 @@ final class SettingsScreen {
         if (!a.isTvDevice()) {
             toggle("首頁推薦卡片", Prefs.SHOW_HERO_BANNER, true, null);
         }
+        sectionTitle("動畫與效果");
         toggle(
                 "減少透明效果",
                 Prefs.REDUCED_TRANSPARENCY,
@@ -919,6 +923,8 @@ final class SettingsScreen {
                     new int[] {0, 1},
                     0);
         }
+        // mkoai 2.0.65: Material section titles (phone only; no-op on TV).
+        sectionTitle("播放器與解碼");
         ints(
                 "畫面輸出",
                 Prefs.VIDEO_OUTPUT,
@@ -941,6 +947,7 @@ final class SettingsScreen {
         toggle("優先使用相容音訊解碼", Prefs.SOFTWARE_AUDIO, false, null);
         toggle("優先選擇 AAC 音軌", Prefs.PREFER_AAC, false, null);
         link("解碼元件", "檢視本機已載入的音訊與影片擴充套件", "settings-decoders", () -> open(this::decoders));
+        sectionTitle("畫面與速度");
         ints(
                 "畫面比例",
                 Prefs.ASPECT,
@@ -995,6 +1002,7 @@ final class SettingsScreen {
                                     })
                             .show();
                 });
+        sectionTitle("自動播放與跳過");
         toggle("自動播放下一集", Prefs.AUTO_NEXT, true, null);
         // mkoai 2.0.48: 自動選源直接播放（預設開啟）。開：按播放自動選源、
         // 直接播放，絕不跳出選源清單；關：按播放先顯示「選擇片源」。
@@ -1027,6 +1035,7 @@ final class SettingsScreen {
         int subSize = Prefs.clampSubtitleSize(a.prefs.getInt(Prefs.SUBTITLE_SIZE, 45));
         int subBottom = Prefs.clampSubtitleBottom(a.prefs.getInt(Prefs.SUBTITLE_BOTTOM, 24));
         int subStyle = Prefs.clampSubtitleStyle(a.prefs.getInt(Prefs.SUBTITLE_STYLE, 0));
+        sectionTitle("字幕與彈幕");
         link(
                 a.isTvDevice() ? "字幕大小與位置（全屏預覽調校）" : "字幕全屏除錯（雙指縮放 · 按住拖拽）",
                 "字號 "
@@ -1044,6 +1053,7 @@ final class SettingsScreen {
                 new int[] {0, 1, 2, 3, 4, 5, 6, 7},
                 0);
         toggle("自動載入來源彈幕", Prefs.DANMAKU_DEFAULT, true, null);
+        sectionTitle("畫面色彩與音效");
         ints(
                 "畫面色彩",
                 Prefs.PICTURE_EFFECT,
@@ -1062,6 +1072,9 @@ final class SettingsScreen {
 
     void data() {
         page("搜尋與資料", "搜尋預設識別首拼和全拼，並檢索配置中全部可搜尋來源。");
+        // mkoai 2.0.65: Material section titles (phone only — sectionTitle
+        // no-ops on TV, so the rows and their order are untouched there).
+        sectionTitle("搜尋");
         ints(
                 "同時搜尋的來源數",
                 Prefs.SEARCH_THREADS,
@@ -1074,6 +1087,7 @@ final class SettingsScreen {
                 new String[] {"10 秒", "20 秒", "30 秒"},
                 new int[] {10, 20, 30},
                 20);
+        sectionTitle("配置源");
         link(
                 "匯入或更新配置源",
                 a.isTvDevice()
@@ -1101,6 +1115,7 @@ final class SettingsScreen {
                     () -> SourcePicker.showWarehouses(a));
         }
         toggle("啟用來源擴充套件", Prefs.EXPERIMENTAL_CSP, true, a::closeEngines);
+        sectionTitle("內容與帳號");
         toggle(
                 "隱藏網盤相關功能",
                 Prefs.HIDE_NETDISK,
@@ -1146,6 +1161,7 @@ final class SettingsScreen {
                         : "用 Google 帳號同步觀看紀錄與收藏",
                 "settings-account-sync",
                 this::accountSync);
+        sectionTitle("資料與備份");
         link(
                 "備份配置與偏好",
                 "匯出配置與偏好，請妥善保管；不含外掛單獨儲存的登入狀態",
@@ -1188,6 +1204,7 @@ final class SettingsScreen {
         // flips the Prefs flag — PostHogClient.capture reads it and no-ops
         // when off. The test push never retries: ntfy is rate-limited today,
         // so a failure is expected and just shown.
+        sectionTitle("分析與推播");
         toggle("使用分析", Prefs.ANALYTICS_ENABLED, true, null);
         link(
                 "推播測試",
@@ -1209,6 +1226,7 @@ final class SettingsScreen {
                 "ntfy topic："
                         + NotifyClient.TOPIC
                         + "。在 ntfy App 訂閱這個 topic 才收得到通知。");
+        sectionTitle("恢復");
         link(
                 "恢復播放與外觀預設設定",
                 "保留來源配置和網盤登入",
@@ -1252,9 +1270,75 @@ final class SettingsScreen {
                 .show();
     }
 
+    // mkoai 2.0.65: Material section title — bold white 16sp, no card,
+    // no background. Phone only: on TV the settings pages keep their
+    // current flat list with no titles, so the D-pad order is untouched.
+    void sectionTitle(String title) {
+        if (a.isTvDevice()) return;
+        TextView t = a.text(title, 16, MainActivity.WHITE);
+        t.setTypeface(null, Typeface.BOLD);
+        t.setPadding(a.dp(2), a.dp(10), a.dp(2), a.dp(8));
+        a.body.addView(t, new LinearLayout.LayoutParams(-1, -2));
+    }
+
     void toggle(String title, String key, boolean defaultValue, Runnable after) {
         boolean tv = a.isTvDevice();
         boolean initial = a.prefs.getBoolean(key, defaultValue);
+        if (!tv) {
+            // mkoai 2.0.65: Material dark row — flat (no card), 24dp
+            // icon, 16sp title, 12sp grey caption, Material switch.
+            // Behaviour is identical to the TV card row below (same
+            // key, same confirm flow, same after-callback); only the
+            // look changes.
+            LinearLayout row = a.row();
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(a.dp(2), a.dp(12), a.dp(2), a.dp(12));
+            MobileShell.SettingIconView icon =
+                    new MobileShell.SettingIconView(
+                            a, MobileShell.SettingIconView.kindForSetting(key, title));
+            LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(a.dp(24), a.dp(24));
+            iconLp.rightMargin = a.dp(14);
+            row.addView(icon, iconLp);
+            LinearLayout copy = a.vertical();
+            copy.addView(a.text(title, 16, MainActivity.WHITE));
+            final TextView caption = a.text(initial ? "開啟" : "關閉", 12, MainActivity.MUTED);
+            caption.setPadding(0, a.dp(4), 0, 0);
+            copy.addView(caption);
+            row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+            final MaterialSwitch2065.MaterialSwitchView toggleSwitch =
+                    new MaterialSwitch2065.MaterialSwitchView(a, initial);
+            LinearLayout.LayoutParams switchLp =
+                    new LinearLayout.LayoutParams(a.dp(52), a.dp(32));
+            switchLp.leftMargin = a.dp(12);
+            row.addView(toggleSwitch, switchLp);
+            row.setTag("setting-" + key);
+            row.setClickable(true);
+            MobileDetailScreen.bindTouchFeedback(row);
+            row.setOnClickListener(
+                    v -> {
+                        final boolean current = a.prefs.getBoolean(key, defaultValue);
+                        final boolean nextVal = !current;
+                        Runnable applyChange =
+                                () -> {
+                                    a.prefs.edit().putBoolean(key, nextVal).apply();
+                                    toggleSwitch.setChecked(nextVal, !a.reduced);
+                                    caption.setText(nextVal ? "開啟" : "關閉");
+                                    if (after != null) after.run();
+                                    if (key.equals(Prefs.WALLPAPER_ENABLED)) {
+                                        a.refresh();
+                                    }
+                                };
+                        if (key.equals(Prefs.EXPERIMENTAL_CSP) && nextVal && !current) {
+                            confirm("執行配置源提供的擴充套件？請僅使用你信任的配置。", applyChange);
+                        } else {
+                            applyChange.run();
+                        }
+                    });
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, -2);
+            size.bottomMargin = a.dp(10);
+            a.body.addView(row, size);
+            return;
+        }
         LinearLayout row = a.row();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(a.dp(20), a.dp(15), a.dp(20), a.dp(15));

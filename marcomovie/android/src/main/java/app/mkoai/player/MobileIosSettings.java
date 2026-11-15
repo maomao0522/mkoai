@@ -346,11 +346,12 @@ final class MobileIosSettings {
             MainActivity a, LinearLayout parent, PaneSpec section, PageController ctl) {
         // mkoai 2.0.51: YouTube-style flat section (was a VidHub dark card
         // with a coloured icon badge). Dark colours unchanged; the section
-        // is now a small grey label with its rows directly on the page
-        // background. Builders and rows are unchanged.
+        // is now a bold white title with its rows directly on the page
+        // background (mkoai 2.0.65: was a small grey label). Builders and
+        // rows are unchanged.
         LinearLayout group = a.vertical();
         group.setPadding(0, a.dp(12), 0, 0);
-        TextView secTitle = a.text(section.title, 13f, 0xff9ca3af);
+        TextView secTitle = a.text(section.title, 16f, 0xfff5f5f7);
         secTitle.setTypeface(null, Typeface.BOLD);
         secTitle.setPadding(a.dp(2), 0, a.dp(2), 0);
         group.addView(secTitle, new LinearLayout.LayoutParams(-1, -2));
@@ -1633,39 +1634,56 @@ final class MobileIosSettings {
             String[] options,
             int selectedIndex,
             final ChoiceAction onSelect) {
+        // mkoai 2.0.65: Material radio rows instead of the coral pills —
+        // one row per option, title left, a drawn radio circle right
+        // (coral filled with a white dot when selected, grey ring when
+        // not). Same onSelect contract; the caller re-renders the page
+        // (ctl.rerenderInPlace) so the selection refreshes. The
+        // "density-option-N" tag on the option title keeps the choices
+        // findable the same way the pills were.
         LinearLayout group = a.vertical();
-        TextView heading = a.text(label, 13f, 0xff9ca3af);
+        TextView heading = a.text(label, 14f, 0xffd1d5db);
         heading.setTypeface(null, Typeface.BOLD);
-        heading.setPadding(a.dp(4), 0, a.dp(4), a.dp(8));
+        heading.setPadding(a.dp(4), 0, a.dp(4), a.dp(10));
         group.addView(heading, new LinearLayout.LayoutParams(-1, -2));
 
-        FlowWrapLayout wrap = new FlowWrapLayout(a, a.dp(8), a.dp(8));
         for (int i = 0; i < options.length; i++) {
             final int idx = i;
             boolean active = (i == selectedIndex);
-            String pillLabel = active ? "✓ " + options[i] : options[i];
-            TextView pill = a.text(pillLabel, 13f, active ? Color.WHITE : 0xfff5f5f7);
-            pill.setTypeface(null, active ? Typeface.BOLD : Typeface.NORMAL);
-            pill.setSingleLine(true);
-            pill.setGravity(Gravity.CENTER);
-            pill.setPadding(a.dp(14), a.dp(8), a.dp(14), a.dp(8));
-
-            GradientDrawable bg = new GradientDrawable();
-            bg.setShape(GradientDrawable.RECTANGLE);
-            bg.setCornerRadius(a.dp(999));
+            LinearLayout row = a.row();
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(a.dp(2), a.dp(12), a.dp(2), a.dp(12));
+            TextView title = a.text(options[i], 15f, 0xfff5f5f7);
+            title.setTag("density-option-" + i);
+            row.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
+            FrameLayout radio = new FrameLayout(a);
+            GradientDrawable ring = new GradientDrawable();
+            ring.setShape(GradientDrawable.OVAL);
             if (active) {
-                // mkoai 2.0.39: coral selected pill (mkoai accent #E34B58).
-                bg.setColor(0xffe34b58);
+                ring.setColor(0xffe34b58);
             } else {
-                bg.setColor(0xff1e1e22);
-                bg.setStroke(Math.max(1, a.dp(1)), 0x33ffffff);
+                ring.setColor(0x00000000);
+                ring.setStroke(Math.max(1, a.dp(2)), 0xff8e8e93);
             }
-            pill.setBackground(bg);
-            bindPressFeedback(pill);
-            pill.setOnClickListener(v -> onSelect.onSelect(idx));
-            wrap.addView(pill);
+            radio.setBackground(ring);
+            if (active) {
+                View dot = new View(a);
+                GradientDrawable dotBg = new GradientDrawable();
+                dotBg.setShape(GradientDrawable.OVAL);
+                dotBg.setColor(MainActivity.WHITE);
+                dot.setBackground(dotBg);
+                FrameLayout.LayoutParams dotLp =
+                        new FrameLayout.LayoutParams(a.dp(8), a.dp(8), Gravity.CENTER);
+                radio.addView(dot, dotLp);
+            }
+            LinearLayout.LayoutParams radioLp =
+                    new LinearLayout.LayoutParams(a.dp(20), a.dp(20));
+            radioLp.leftMargin = a.dp(12);
+            row.addView(radio, radioLp);
+            bindPressFeedback(row);
+            row.setOnClickListener(v -> onSelect.onSelect(idx));
+            group.addView(row, new LinearLayout.LayoutParams(-1, -2));
         }
-        group.addView(wrap, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.bottomMargin = a.dp(16);
@@ -1711,7 +1729,7 @@ final class MobileIosSettings {
         row.addView(icon, iconLp);
 
         LinearLayout copy = a.vertical();
-        TextView t = a.text(title, 15f, 0xfff5f5f7);
+        TextView t = a.text(title, 16f, 0xfff5f5f7);
         copy.addView(t);
         if (subtitle != null && !subtitle.isEmpty()) {
             TextView s = a.text(subtitle, 12f, 0xff9ca3af);
@@ -1720,8 +1738,12 @@ final class MobileIosSettings {
         }
         row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        final MobileShell.IosSwitchView toggleSwitch = new MobileShell.IosSwitchView(a, initial);
-        LinearLayout.LayoutParams switchLp = new LinearLayout.LayoutParams(a.dp(50), a.dp(30));
+        // mkoai 2.0.65: Material switch (52x32dp, coral when on) in place
+        // of the iOS pill switch. Same setChecked contract, same click
+        // handling below.
+        final MaterialSwitch2065.MaterialSwitchView toggleSwitch =
+                new MaterialSwitch2065.MaterialSwitchView(a, initial);
+        LinearLayout.LayoutParams switchLp = new LinearLayout.LayoutParams(a.dp(52), a.dp(32));
         switchLp.leftMargin = a.dp(12);
         row.addView(toggleSwitch, switchLp);
 

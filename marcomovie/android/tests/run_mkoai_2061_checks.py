@@ -312,13 +312,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.64"' in ev and "20065" in ev, "edition-versions.json = 2.0.64 / 20065")
+    check('"2.0.65"' in ev and "20066" in ev, "edition-versions.json = 2.0.65 / 20066")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.64"' in man and 'android:versionCode="20065"' in man,
-          "AndroidManifest.xml = 2.0.64 / 20065")
+    check('android:versionName="2.0.65"' in man and 'android:versionCode="20066"' in man,
+          "AndroidManifest.xml = 2.0.65 / 20066")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

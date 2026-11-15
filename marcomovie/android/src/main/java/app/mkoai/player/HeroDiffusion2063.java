@@ -90,6 +90,25 @@ final class HeroDiffusion2063 {
     static final int BLOOM_STOPS = 6;
 
     /**
+     * Number of stops in the anchored bloom ({@link #bloomColorsAnchored})
+     * and the hero top fade ({@link #topFadeColors}). Eight evenly spaced
+     * stops shape the fade without any stop-position API.
+     */
+    static final int ANCHORED_BLOOM_STOPS = 8;
+
+    /**
+     * mkoai 2.0.65: the phone-home top bar's height in dp — 48dp
+     * circles (search / history / account) + 6dp + 6dp bar padding.
+     * Used by {@link #heroBottomFraction} to find where the hero's
+     * bottom edge lands in the viewport at rest.
+     */
+    static final float HOME_TOP_BAR_HEIGHT_DP = 60f;
+
+    /** Lowest / highest hold fraction {@link #heroBottomFraction} returns. */
+    static final float HOLD_FRACTION_MIN = 0.40f;
+    static final float HOLD_FRACTION_MAX = 0.90f;
+
+    /**
      * The top-edge fade's fixed base colour (the near-black the 2.0.38
      * status-bar veil always used). It stays the fade's colour on every
      * tab except the phone home, and on the home before the first hero
@@ -275,5 +294,100 @@ final class HeroDiffusion2063 {
         int far = backgroundTone(bg);
         int mid = lerpColor(bg, far, 0.5f);
         return new int[] {bg, bg, bg, mid, far, far};
+    }
+
+    /**
+     * mkoai 2.0.65: the hero's height in dp for a page {@code pageWidthDp}
+     * wide — the same formula the carousel uses (tallest 640dp, shortest
+     * 420dp, 1.25x the page width in between).
+     */
+    static float heroHeightDp(float pageWidthDp) {
+        return Math.min(640f, Math.max(420f, pageWidthDp * 1.25f));
+    }
+
+    /**
+     * mkoai 2.0.65: where the hero's bottom edge lands in the viewport
+     * at rest, as a fraction of the viewport height (0 = top, 1 =
+     * bottom). The body stacks, top to bottom: the status bar, 8dp of
+     * body padding, the top bar ({@code barDp}), 4dp of hero-container
+     * padding, then the hero itself ({@code heroDp}). The fraction is
+     * clamped to {@link #HOLD_FRACTION_MIN}..{@link #HOLD_FRACTION_MAX}:
+     * below 0.40 the old bloom shape is kept, above 0.90 there would be
+     * no room left for the fade at all.
+     *
+     * <p>Why this exists: the 2.0.64 bloom is viewport-fixed and holds
+     * the tone only to 40% of the viewport, but the hero's bottom edge
+     * at rest lands at ~0.6–0.8 of the viewport (a 450–640dp hero under
+     * a 60dp bar) — right where the bloom has already faded toward the
+     * far colour — while the hero's bottom scrim ends at the full tone.
+     * That step is the seam the user sees at rest. Scrolling down a bit
+     * slides the hero's bottom edge up into the bloom's pure-tone zone,
+     * which is why the scrolled state already looked right. Anchoring
+     * the hold to the hero's bottom edge makes the rest state match the
+     * scrolled state: scrolling only ever moves the hero's bottom edge
+     * UP, deeper into the pure-tone zone, so the seam can never come
+     * back in any scroll position.
+     */
+    static float heroBottomFraction(
+            float statusBarDp, float barDp, float heroDp, float viewportDp) {
+        if (viewportDp <= 0) return HOLD_FRACTION_MIN;
+        float f = (statusBarDp + 8f + barDp + 4f + heroDp) / viewportDp;
+        return Math.max(HOLD_FRACTION_MIN, Math.min(HOLD_FRACTION_MAX, f));
+    }
+
+    /**
+     * mkoai 2.0.65: the page-background bloom anchored to the hero's
+     * bottom edge — the tone holds at full strength from the top down
+     * to {@code holdFraction} of the viewport (the hero's bottom edge
+     * at rest), then fades outward into the far colour over the rest of
+     * the page. Eight evenly spaced stops: every stop at or above the
+     * hold is the tone itself, the stops below it ramp the tone into
+     * the far colour ({@link #backgroundTone} of the tone). With the
+     * hold at 0.40 the shape is the same as {@link #bloomColors}; with
+     * the hold at the hero's bottom edge the hero's bottom scrim (which
+     * ends at the full tone) meets exactly the tone behind it, in every
+     * scroll position. The far colour is the same hue, deeper and
+     * greyer — never grey and never black.
+     */
+    static int[] bloomColorsAnchored(int bg, float holdFraction) {
+        float hold =
+                Math.max(HOLD_FRACTION_MIN, Math.min(HOLD_FRACTION_MAX, holdFraction));
+        int far = backgroundTone(bg);
+        int[] out = new int[ANCHORED_BLOOM_STOPS];
+        for (int i = 0; i < ANCHORED_BLOOM_STOPS; i++) {
+            float pos = i / (float) (ANCHORED_BLOOM_STOPS - 1);
+            if (pos <= hold) {
+                out[i] = bg;
+            } else {
+                float t = (pos - hold) / (1f - hold);
+                out[i] = lerpColor(bg, far, t);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * mkoai 2.0.65: the hero TOP fade — the mirror of the bottom scrim.
+     * The top bar is a flat band of the page tone sitting directly above
+     * the hero artwork, so the bar's bottom edge reads as a line against
+     * the photo's top edge. This gradient lays the page tone over the
+     * top of the artwork (opaque through the first ~14%, half at ~28%,
+     * transparent from ~43% down), so the photo emerges out of the bar's
+     * own colour instead of starting at a hard edge — the bar and the
+     * hero read as one field in every scroll position, exactly like the
+     * bottom scrim does for the rows below. Eight evenly spaced stops.
+     */
+    static int[] topFadeColors(int bg) {
+        int rgb = bg & 0x00ffffff;
+        return new int[] {
+            bg,
+            bg,
+            0x80000000 | rgb,
+            0x00000000,
+            0x00000000,
+            0x00000000,
+            0x00000000,
+            0x00000000
+        };
     }
 }
