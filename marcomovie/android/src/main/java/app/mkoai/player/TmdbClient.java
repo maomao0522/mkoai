@@ -342,6 +342,68 @@ final class TmdbClient {
         return best;
     }
 
+    /**
+     * 2.0.58: translate an English title to its zh-TW name via TMDB (used
+     * by TitleTranslator when awwrated has no Taiwan title). Searches with
+     * language=zh-TW and accepts a result only when its original_title /
+     * original_name matches the query, so a wrong work is never
+     * substituted. Returns "" when nothing matches. Never throws.
+     */
+    static String translateTitle(String englishTitle) {
+        if (englishTitle == null || englishTitle.trim().isEmpty()) return "";
+        String q = englishTitle.trim();
+        for (String type : new String[] {"tv", "movie"}) {
+            try {
+                String url =
+                        API
+                                + "/search/"
+                                + type
+                                + "?api_key="
+                                + API_KEY
+                                + "&language=zh-TW&query="
+                                + enc(q)
+                                + "&page=1&include_adult=false";
+                String zh = pickTranslatedTitle(get(url), q, type);
+                if (zh != null && !zh.isEmpty()) return zh;
+            } catch (Throwable ignored) {
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 2.0.58: pick the zh-TW title from a TMDB /search response (testable
+     * without network). Accepts a result only when its original title
+     * matches the query (titleScore >= 80); returns "" when the zh-TW
+     * title is missing, identical to the query (TMDB has no translation,
+     * it returns the original as-is), or there is no match. Never throws.
+     */
+    static String pickTranslatedTitle(String raw, String query, String type) {
+        try {
+            JSONObject res = new JSONObject(raw);
+            JSONArray arr = res.optJSONArray("results");
+            if (arr == null) return "";
+            boolean movie = "movie".equals(type);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject r = arr.optJSONObject(i);
+                if (r == null) continue;
+                String original =
+                        movie
+                                ? r.optString("original_title", "")
+                                : r.optString("original_name", "");
+                if (titleScore(query, original) < 80) continue;
+                String zh = movie ? r.optString("title", "") : r.optString("name", "");
+                zh = zh == null ? "" : zh.trim();
+                if (zh.isEmpty()) continue;
+                if (matchKey(zh).equals(matchKey(query))) continue;
+                return zh;
+            }
+            return "";
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
     /** Base item from a /search result (poster already language-biased). */
     private static Item itemFromSearch(JSONObject r, String type) {
         Item it = new Item();

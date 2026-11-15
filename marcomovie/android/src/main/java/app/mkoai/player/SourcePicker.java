@@ -289,6 +289,13 @@ final class SourcePicker {
             card.setFocusable(true);
             card.setClickable(true);
             MobileDetailScreen.bindTouchFeedback(card);
+            // 2.0.58: bindTouchFeedback clears focusable (fine for touch
+            // phones, fatal for TV remotes — a non-focusable card can
+            // never take D-pad focus, so DPAD_UP/DOWN never reaches it
+            // and DPAD_CENTER has nothing to click). Re-enable focus on
+            // TV only; the phone path is unchanged (focusableInTouchMode
+            // stays false, so taps behave exactly as before).
+            if (tv) card.setFocusable(true);
             TextView playIcon = a.text("▶", 12, Color.WHITE);
             playIcon.setGravity(Gravity.CENTER);
             playIcon.setBackground(a.bg(0xff34c759, 999));
@@ -338,6 +345,9 @@ final class SourcePicker {
             del.setFocusable(true);
             del.setClickable(true);
             MobileDetailScreen.bindTouchFeedback(del);
+            // 2.0.58: same TV-focus fix as the card (see above) — without
+            // it the ✕ delete button is unreachable with the remote.
+            if (tv) del.setFocusable(true);
             del.setOnFocusChangeListener((v, f) -> del.setTextColor(f ? 0xffef4444 : 0xff9ca3af));
             del.setOnClickListener(v -> confirmDeleteSource(a, dialog, site));
             LinearLayout.LayoutParams delLp = new LinearLayout.LayoutParams(-2, -2);

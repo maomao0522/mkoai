@@ -63,14 +63,47 @@ final class UpdatePolicy {
                     || u.getFragment() != null
                     || u.getPath().contains("..")
                     || !u.getRawPath().equals(u.getPath())) return false;
-            // mkoai: release APKs are Drive download links only.
-            if (!"drive.google.com".equals(u.getHost()) || !"/uc".equals(u.getPath()))
-                return false;
             String q = u.getQuery();
-            return q != null && q.matches("export=download&id=[A-Za-z0-9_-]+");
+            // mkoai: release APKs are Drive download links only.
+            if ("drive.google.com".equals(u.getHost()) && "/uc".equals(u.getPath()))
+                return q != null && q.matches("export=download&id=[A-Za-z0-9_-]+");
+            // mkoai 2.0.58: the direct form Drive serves for large APKs.
+            // The /uc link 303-redirects to a "Download warning" page
+            // without confirm=t, so the APK itself never downloads and
+            // verifyApk fails ("下載或校驗失敗"). The manifest must be
+            // able to point at the direct form instead; the host/path
+            // and the three required params are all enforced here.
+            if ("drive.usercontent.google.com".equals(u.getHost())
+                    && "/download".equals(u.getPath())) {
+                return hasApkParams(u.getRawQuery());
+            }
+            return false;
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * The direct-download query must carry id=&lt;Drive id&gt;,
+     * export=download and confirm=t (any order, no other params).
+     * Parsed from the RAW query so the check sees exactly what the
+     * server sees (a %26 inside a value must not forge a parameter).
+     */
+    private static boolean hasApkParams(String rawQuery) {
+        if (rawQuery == null || rawQuery.isEmpty()) return false;
+        String id = null;
+        boolean exportOk = false, confirmOk = false;
+        for (String part : rawQuery.split("&")) {
+            int eq = part.indexOf('=');
+            if (eq <= 0) return false;
+            String k = part.substring(0, eq);
+            String v = part.substring(eq + 1);
+            if ("id".equals(k)) id = v;
+            else if ("export".equals(k)) exportOk = "download".equals(v);
+            else if ("confirm".equals(k)) confirmOk = "t".equals(v);
+            else return false;
+        }
+        return id != null && id.matches("[A-Za-z0-9_-]+") && exportOk && confirmOk;
     }
 
     static boolean transferUrl(String value) {

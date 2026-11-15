@@ -404,6 +404,31 @@ final class HomeScreen {
         }
     }
 
+    /**
+     * 2.0.58: compose the TV home 推薦 grid — Douban 新片 first (up to
+     * 10), then the selected source's own videos. Simkl trending is only
+     * used when the source yields nothing (supplement, never the primary
+     * home — it used to be, which is why switching sources never changed
+     * the home). Dedupes by video id; never returns null.
+     */
+    static List<Cms.Video> composeHomeVideos(
+            List<Cms.Video> doubanNew,
+            List<Cms.Video> sourceVideos,
+            List<Cms.Video> simklHot) {
+        List<Cms.Video> out = new ArrayList<>();
+        if (doubanNew != null) {
+            for (Cms.Video v : doubanNew) {
+                if (v != null && v.id != null && !v.id.trim().isEmpty()) out.add(v);
+            }
+        }
+        List<Cms.Video> body = null;
+        if (sourceVideos != null && !sourceVideos.isEmpty()) body = sourceVideos;
+        else if (simklHot != null && !simklHot.isEmpty()) body = simklHot;
+        if (body != null) out.addAll(body);
+        clean(out);
+        return out;
+    }
+
     void loadHome() {
         if (busy) return;
         busy = true;
@@ -414,55 +439,16 @@ final class HomeScreen {
         a.prefs.edit().putString(Prefs.LOADING_SITE, site.key).commit();
         a.submitPage(
                 () -> {
+                    // 2.0.58: Douban 新片, fetched once for this load.
+                    // Best effort — a Douban failure must never blank the
+                    // home (the catch below also falls back to it).
+                    List<Cms.Video> doubanNew = null;
                     try {
-                        // mkoai: Simkl is the PRIMARY home content (user
-                        // choice 2026-11-12, replaces Douban which fails on
-                        // the phone in Taiwan). Load Simkl trending first
-                        // (10 TV + 10 movies) and show it as the home grid.
-                        // The selected source is only used for
-                        // search/detail/playback, not for the home.
-                        List<Cms.Video> simklHot = null;
-                        for (int attempt = 0; attempt < 2 && simklHot == null; attempt++) {
-                            try {
-                                List<Cms.Video> hot = SimklHome.fetchHot();
-                                if (hot != null && !hot.isEmpty()) simklHot = hot;
-                            } catch (Throwable ignored) {
-                            }
-                            if (simklHot == null && attempt == 0) {
-                                try {
-                                    Thread.sleep(800);
-                                } catch (InterruptedException ie) {
-                                    Thread.currentThread().interrupt();
-                                    throw ie;
-                                }
-                            }
-                        }
-                        if (simklHot != null) {
-                            final List<Cms.Video> hotVideos = simklHot;
-                            RequestScope.checkCurrent();
-                            a.ui.post(
-                                    () -> {
-                                        a.prefs
-                                                .edit()
-                                                .putString(Prefs.LOADING_SITE, "")
-                                                .apply();
-                                        // mkoai: always release busy, even for a
-                                        // stale token, so a superseded load can
-                                        // never block later loadHome() calls.
-                                        busy = false;
-                                        if (!active() || token != request) return;
-                                        snapshot =
-                                                new Snapshot(
-                                                        hotVideos,
-                                                        new java.util.ArrayList<>(),
-                                                        "",
-                                                        1);
-                                        a.homeData.put(site.key, snapshot);
-                                        renderSnapshot();
-                                        status.setText("Simkl 熱門");
-                                    });
-                            return;
-                        }
+                        List<Cms.Video> n = DoubanHome.fetchNew();
+                        if (n != null && !n.isEmpty()) doubanNew = n;
+                    } catch (Throwable ignored) {
+                    }
+                    try {
                         SourceEngine engine = a.engine(site);
                         // mkoai: the CMS API to mainland China is flaky from
                         // Taiwan mobile networks — retry the home fetch up to
@@ -520,6 +506,61 @@ final class HomeScreen {
                             list = Cms.listing(engine.category(skip, 1));
                             clean(list.videos);
                         }
+                        // 2.0.58: the selected source yielded no videos —
+                        // Simkl trending is now only a fallback/supplement
+                        // (it used to be the PRIMARY home content, which
+                        // is why picking a different source never changed
+                        // the home). Douban 新片 still lead the grid.
+                        if (list.videos.isEmpty()
+                                && !SourceController.isConfigOrNetdiskSite(site)) {
+                            List<Cms.Video> simklHot = null;
+                            for (int attempt = 0; attempt < 2 && simklHot == null; attempt++) {
+                                try {
+                                    List<Cms.Video> hot = SimklHome.fetchHot();
+                                    if (hot != null && !hot.isEmpty()) simklHot = hot;
+                                } catch (Throwable ignored) {
+                                }
+                                if (simklHot == null && attempt == 0) {
+                                    try {
+                                        Thread.sleep(800);
+                                    } catch (InterruptedException ie) {
+                                        Thread.currentThread().interrupt();
+                                        throw ie;
+                                    }
+                                }
+                            }
+                            if (simklHot != null) {
+                                final List<Cms.Video> composed =
+                                        composeHomeVideos(doubanNew, null, simklHot);
+                                final boolean hasDoubanNew = doubanNew != null;
+                                RequestScope.checkCurrent();
+                                a.ui.post(
+                                        () -> {
+                                            a.prefs
+                                                    .edit()
+                                                    .putString(Prefs.LOADING_SITE, "")
+                                                    .apply();
+                                            // mkoai: always release busy, even for a
+                                            // stale token, so a superseded load can
+                                            // never block later loadHome() calls.
+                                            busy = false;
+                                            if (!active() || token != request) return;
+                                            snapshot =
+                                                    new Snapshot(
+                                                            composed,
+                                                            new java.util.ArrayList<>(),
+                                                            "",
+                                                            1);
+                                            a.homeData.put(site.key, snapshot);
+                                            renderSnapshot();
+                                            status.setText(
+                                                    hasDoubanNew
+                                                            ? "豆瓣新片 · Simkl 熱門"
+                                                            : "Simkl 熱門");
+                                        });
+                                return;
+                            }
+                        }
                         // mkoai: source loaded but has no videos — show Douban hot
                         // instead of an empty home.
                         if (list.videos.isEmpty()
@@ -532,8 +573,12 @@ final class HomeScreen {
                             } catch (Throwable ignored) {
                             }
                         }
+                        // 2.0.58: the home follows the selected source —
+                        // Douban 新片 first, then this source's own videos.
+                        List<Cms.Video> composed =
+                                composeHomeVideos(doubanNew, list.videos, null);
                         Snapshot result =
-                                new Snapshot(list.videos, categories, skip, list.pageCount);
+                                new Snapshot(composed, categories, skip, list.pageCount);
                         RequestScope.checkCurrent();
                         result.filterSchema = raw;
                         if (!a.reduced
@@ -553,7 +598,8 @@ final class HomeScreen {
                         AppLog.w("HomeScreen", "loadHome failed for " + site.key, e);
                         // mkoai: the source home failed even after retries.
                         // First try the stale disk snapshot (old content beats
-                        // an empty error page), then Douban hot titles.
+                        // an empty error page), then Douban 新片 (already
+                        // fetched above), then Douban hot titles.
                         Snapshot stale = null;
                         try {
                             Snapshot d = readDiskSnapshot(a, site.key);
@@ -561,8 +607,9 @@ final class HomeScreen {
                         } catch (Throwable ignored) {
                         }
                         final Snapshot staleSnap = stale;
+                        final List<Cms.Video> doubanFallback = doubanNew;
                         List<Cms.Video> douban = null;
-                        if (staleSnap == null) {
+                        if (staleSnap == null && doubanFallback == null) {
                             try {
                                 douban = DoubanHome.fetchHot();
                             } catch (Throwable ignored) {
@@ -579,6 +626,15 @@ final class HomeScreen {
                                         a.homeData.put(site.key, staleSnap);
                                         renderSnapshot();
                                         status.setText("來源暫時連不上，顯示上次快取");
+                                    } else if (doubanFallback != null && !doubanFallback.isEmpty()) {
+                                        snapshot =
+                                                new Snapshot(
+                                                        new ArrayList<>(doubanFallback),
+                                                        new java.util.ArrayList<>(),
+                                                        "",
+                                                        1);
+                                        renderSnapshot();
+                                        status.setText("來源載入失敗，顯示豆瓣新片");
                                     } else if (hot != null && !hot.isEmpty()) {
                                         snapshot =
                                                 new Snapshot(
