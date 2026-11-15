@@ -239,9 +239,11 @@ def main():
           "rest state: both bloom sites (create + re-tint) use the anchored bloom")
     check("heroDiffusionShown, heroDiffusionHoldFraction" in ms,
           "rest state: the bloom is anchored to heroDiffusionHoldFraction")
-    check("hero-diffusion-topfade" not in ms and "topFadeColors" not in ms
+    check("hero-diffusion-topfade" not in ms
           and "heroTopFades" not in ms,
-          "rest state: the 2.0.65 hero top fade is gone in 2.0.66 (the bar is a floating pill now)")
+          "rest state: the 2.0.65 IN-CARD hero top fade is gone in 2.0.66 (the bar is a floating pill now)")
+    check("topFadeColors" in ms,
+          "rest state: 2.0.69 wires topFadeColors back in as the ROOT-LEVEL top veil (not the in-card fade)")
     check("HOME_TOP_BAR_HEIGHT_DP" not in ms and "HOME_TOP_BAR_HEIGHT_DP" not in hd
           and "HOLD_FRACTION_MIN = 0.40f" in hd
           and "HOLD_FRACTION_MAX = 0.90f" in hd,
@@ -294,13 +296,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.68"' in ev and "20069" in ev, "edition-versions.json = 2.0.68 / 20069")
+    check('"2.0.69"' in ev and "20070" in ev, "edition-versions.json = 2.0.69 / 20070")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.68"' in man and 'android:versionCode="20069"' in man,
-          "AndroidManifest.xml = 2.0.68 / 20069")
+    check('android:versionName="2.0.69"' in man and 'android:versionCode="20070"' in man,
+          "AndroidManifest.xml = 2.0.69 / 20070")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

@@ -1101,12 +1101,17 @@ final class MobileShell {
             TopEdgeFadeView topFade = new TopEdgeFadeView(a);
             // mkoai 2.0.64: the fade is retinted with the hero tone while
             // the home tab is active (see applyDiffusionFrame).
+            // mkoai 2.0.69: on the home tab the veil is TALL (see
+            // updateTopFadeHeight) and uses the topFadeColors gradient,
+            // so the hero art emerges out of the page tone at the top
+            // instead of starting at a hard screen-edge cut; on other
+            // tabs it stays the short status-bar veil.
             homeTopFade = topFade;
             topFade.setClickable(false);
             topFade.setFocusable(false);
             a.root.addView(
                     topFade,
-                    new FrameLayout.LayoutParams(-1, statusBarHeight() + a.dp(24), Gravity.TOP));
+                    new FrameLayout.LayoutParams(-1, topFadeHeightPx(), Gravity.TOP));
 
             // Layer 3: Bottom edge subtle vignette behind the floating dock
             BottomEdgeFadeView bottomFade = new BottomEdgeFadeView(a);
@@ -1658,6 +1663,9 @@ final class MobileShell {
         if (nextTab != 0 && homeTopFade != null) {
             homeTopFade.setBaseColor(HeroDiffusion2063.TOP_FADE_FIXED_RGB);
         }
+        // mkoai 2.0.69: the top veil is tall on the home tab (the hero
+        // diffusion) and short everywhere else (the status-bar veil).
+        updateTopFadeHeight();
         if (nextTab != 0) {
             if (bottomEdgeFade != null) bottomEdgeFade.setBaseColor(0x060a08);
             applyStatusBarIcons(false);
@@ -1801,19 +1809,25 @@ final class MobileShell {
         FrameLayout.LayoutParams badgeLp =
                 new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         // mkoai 2.0.66: the badge sits BELOW the floating top overlay
-        // (status bar + 8dp + 48dp overlay + 10dp), so it never covers
+        // (status bar + 20dp + 48dp overlay + 10dp), so it never covers
         // the pill while pulling.
-        badgeLp.topMargin = statusBarHeight() + a.dp(66);
+        badgeLp.topMargin = statusBarHeight() + a.dp(78);
         contentContainer.addView(pullRefreshBadge, badgeLp);
 
         // mkoai 2.0.66: the floating top overlay (Emby style) — one tone
         // pill (logo + source) + separate floating round buttons over
         // the hero. It lives on contentContainer, not in the scroll
         // body, so it floats over the hero art and never scrolls away.
+        // mkoai 2.0.69: the overlay sits statusBarHeight + 20dp down
+        // (was + 8dp — measured on a POCO F5 the pill's top was at
+        // ~49dp with only ~12dp of daylight under the ~37dp status
+        // bar, so the bar read as cut at the top; at + 20dp the top
+        // is ~61dp with ~24dp of daylight, and the bar sits on the
+        // top veil's tone field instead of raw art).
         View topOverlay = buildHomeTopHeaderRow();
         FrameLayout.LayoutParams overlayLp =
                 new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
-        overlayLp.topMargin = statusBarHeight() + a.dp(8);
+        overlayLp.topMargin = statusBarHeight() + a.dp(20);
         overlayLp.leftMargin = a.dp(16);
         overlayLp.rightMargin = a.dp(16);
         contentContainer.addView(topOverlay, overlayLp);
@@ -2853,11 +2867,17 @@ final class MobileShell {
         card.addView(gradient, new FrameLayout.LayoutParams(-1, -1));
         heroArtworks.add(artwork);
         heroScrims.add(gradient);
-        // mkoai 2.0.66: the hero TOP fade is gone — the top bar is a
-        // floating overlay now, not a band above the hero, so there is
-        // no seam left to melt (the fade used to lay the page tone over
-        // the artwork's top ~43%, which also dimmed the poster's top
-        // edge). The bottom scrim is the only fade.
+        // mkoai 2.0.66: the hero TOP fade is gone as an in-card fade —
+        // the top bar is a floating overlay now, not a band above the
+        // hero, so there is no seam left to melt inside the card (the
+        // old fade used to lay the page tone over the artwork's top
+        // ~43%, which also dimmed the poster's top edge). The bottom
+        // scrim is the only IN-CARD fade.
+        // mkoai 2.0.69: the top diffusion lives in the root-level
+        // TopEdgeFadeView veil instead (tall on the home tab, tone
+        // following) — the art's top melts into the page tone at the
+        // viewport top, the mirror of the bottom scrim, so the hero no
+        // longer reads as a poster pasted on the page.
         LinearLayout content = a.vertical();
         content.setGravity(Gravity.CENTER_HORIZONTAL);
         content.setPadding(a.dp(24), a.dp(100), a.dp(24), a.dp(36));
@@ -3129,6 +3149,36 @@ final class MobileShell {
      * setBackground / setBaseColor calls, no layout, no invalidation
      * storm.
      */
+    /**
+     * mkoai 2.0.69: the top veil's height in px. On the home tab it is
+     * statusBarHeight + 250dp: with the topFadeColors shape (opaque
+     * through ~14% of the height, half at ~29%, transparent from
+     * ~43%) that puts the opaque tone over the status bar (POCO F5:
+     * 0.14 x 291dp = ~41dp, the status bar is ~37dp), the half tone
+     * at the bar's middle (~83dp; the bar spans ~61-109dp after the
+     * 2.0.69 move down), and full transparency from ~125dp — so the
+     * status bar and the bar sit on one diffused tone field and the
+     * hero art emerges out of it below, with no hard edge anywhere.
+     * On every other tab the veil stays the short status-bar veil
+     * (statusBarHeight + 24dp), exactly the 2.0.64-2.0.68 look — those
+     * pages have no hero art to melt, and a tall dark veil would wash
+     * over their titles.
+     */
+    private int topFadeHeightPx() {
+        return statusBarHeight() + a.dp(activeTab == 0 ? 250 : 24);
+    }
+
+    /** Resize the top veil for the current tab (no-op when unchanged). */
+    private void updateTopFadeHeight() {
+        if (homeTopFade == null) return;
+        int next = topFadeHeightPx();
+        android.view.ViewGroup.LayoutParams lp = homeTopFade.getLayoutParams();
+        if (lp != null && lp.height != next) {
+            lp.height = next;
+            homeTopFade.setLayoutParams(lp);
+        }
+    }
+
     private void applyDiffusionFrame() {
         if (homeScroll != null) {
             if (heroBloomGradient == null) {
@@ -8332,6 +8382,15 @@ final class MobileShell {
         // on the phone home it follows the hero diffusion tone so the
         // top bar is not a separate dark band. The alphas/stops never
         // change — only the base colour varies.
+        // mkoai 2.0.69: the gradient is HeroDiffusion2063.topFadeColors
+        // (opaque tone through ~14% of the view's height, half at
+        // ~29%, transparent from ~43%) and the view is TALL on the
+        // home tab (statusBarHeight + 250dp, see updateTopFadeHeight),
+        // so the hero art emerges out of the page tone at the top
+        // instead of starting at a hard screen-edge cut — the mirror
+        // of the bottom scrim. The old 3-stop fadeColors veil ended at
+        // statusBarHeight + 24dp and left raw art right below it, so
+        // the hero still read as a poster pasted on the page.
         private int baseRgb = HeroDiffusion2063.TOP_FADE_FIXED_RGB;
 
         TopEdgeFadeView(Context context) {
@@ -8356,8 +8415,8 @@ final class MobileShell {
                             0,
                             0,
                             h,
-                            HeroDiffusion2063.fadeColors(baseRgb),
-                            new float[] {0f, 0.58f, 1f},
+                            HeroDiffusion2063.topFadeColors(baseRgb),
+                            new float[] {0f, 1f / 7, 2f / 7, 3f / 7, 4f / 7, 5f / 7, 6f / 7, 1f},
                             Shader.TileMode.CLAMP));
             canvas.drawRect(0, 0, w, h, paint);
         }

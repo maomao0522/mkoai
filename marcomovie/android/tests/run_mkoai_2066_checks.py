@@ -156,14 +156,15 @@ def main():
           "floating pill: the pill is re-tinted with the page tone (not a fixed dark glass)")
 
     # ---- Static: the dark band is gone ----
-    check("topBarTone" not in ms and "heroTopFades" not in ms
-          and "topFadeColors" not in ms,
-          "dark band gone: no topBarTone / heroTopFades / topFadeColors left in MobileShell")
+    check("topBarTone" not in ms and "heroTopFades" not in ms,
+          "dark band gone: no solid topBarTone band / in-card heroTopFades left in MobileShell")
+    check("topFadeColors" in ms,
+          "dark band gone: 2.0.69 wires topFadeColors back in as the root-level veil GRADIENT (a dissolve, not a solid band)")
     check("HOME_TOP_BAR_HEIGHT_DP" not in ms and "HOME_TOP_BAR_HEIGHT_DP" not in hd
           and "topBarTone" not in hd,
           "dark band gone: the 60dp bar height and topBarTone are deleted from HeroDiffusion2063")
-    check("topFadeColors" in hd,
-          "dark band gone: topFadeColors survives only as an unused pure helper in HeroDiffusion2063")
+    check("topFadeColors" in hd and "topFadeColors" in ms,
+          "dark band gone: topFadeColors lives in HeroDiffusion2063 AND is wired to the root-level veil in MobileShell (2.0.69)")
 
     # ---- Static: light background + dynamic text ----
     check("HeroDiffusion2063.pageTone(" in ms,
@@ -334,13 +335,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.68"' in ev and "20069" in ev, "edition-versions.json = 2.0.68 / 20069")
+    check('"2.0.69"' in ev and "20070" in ev, "edition-versions.json = 2.0.69 / 20070")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.68"' in man and 'android:versionCode="20069"' in man,
-          "AndroidManifest.xml = 2.0.68 / 20069")
+    check('android:versionName="2.0.69"' in man and 'android:versionCode="20070"' in man,
+          "AndroidManifest.xml = 2.0.69 / 20070")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:
