@@ -96,14 +96,6 @@ final class HeroDiffusion2063 {
      */
     static final int ANCHORED_BLOOM_STOPS = 8;
 
-    /**
-     * mkoai 2.0.65: the phone-home top bar's height in dp — 48dp
-     * circles (search / history / account) + 6dp + 6dp bar padding.
-     * Used by {@link #heroBottomFraction} to find where the hero's
-     * bottom edge lands in the viewport at rest.
-     */
-    static final float HOME_TOP_BAR_HEIGHT_DP = 60f;
-
     /** Lowest / highest hold fraction {@link #heroBottomFraction} returns. */
     static final float HOLD_FRACTION_MIN = 0.40f;
     static final float HOLD_FRACTION_MAX = 0.90f;
@@ -115,24 +107,6 @@ final class HeroDiffusion2063 {
      * tone arrives — so the first paint is exactly today's look.
      */
     static final int TOP_FADE_FIXED_RGB = 0x0d1c16;
-
-    /**
-     * mkoai 2.0.64: the phone-home top bar's background for page tone
-     * {@code pageTone} — the page tone itself, no extra darkening. The
-     * tone is already muted (30% toward grey) + darkened (35%) with its
-     * brightest channel clamped to {@link #MAX_BG_CHANNEL} (140), which
-     * is the same readability guarantee the page's own white text
-     * already relies on — and the bar's foreground is the same
-     * white/light glass (logo, ▶ pill, search / ⋯ / history circles,
-     * account initial). A second darken would only re-open a seam
-     * between the bar and the page it is meant to join, so the bar
-     * reads as one continuous field with the hero and the rows below.
-     * The input is always a {@link #backgroundTone} output (or the
-     * slate fallback), never a raw poster average.
-     */
-    static int topBarTone(int pageTone) {
-        return pageTone;
-    }
 
     /**
      * mkoai 2.0.64: the three gradient stops for a top-edge fade with
@@ -237,6 +211,97 @@ final class HeroDiffusion2063 {
         return 0xff000000 | (dr << 16) | (dg << 8) | db;
     }
 
+    /**
+     * mkoai 2.0.66: light-preserving page tone (Emby style). The same
+     * saturation-weighted mute as {@link #backgroundTone}, but gentler
+     * (MUTE_LIGHT_FACTOR 0.85 toward grey, BRIGHTEN_LIGHT_FACTOR 0.92
+     * brightness) and a higher clamp (MAX_LIGHT_CHANNEL 235), so a
+     * light poster stays light instead of being forced dark — the
+     * 2.0.63–2.0.65 pipeline could only ever yield a dark page, which
+     * is the biggest difference from Emby. The luminance snap
+     * ({@link #snapTone}) then pushes the tone out of the awkward
+     * middle around the 0.30 flip threshold: after it, a page tone
+     * is always dark (relative luminance &le; ~0.13, white text) or
+     * light (&ge; ~0.47, dark text), never near the threshold. The
+     * numbers are empirical, not the 0.12 / 0.55 snap targets — the
+     * lighten mix undershoots 0.55 for saturated greens (luminance
+     * is nonlinear in channels; worst case over a colour-cube sweep
+     * is a pure green landing at ~0.47, worst dark ~0.124), but the
+     * gap (0.13..0.47) still holds the 0.30 flip with huge margin,
+     * and the contrast guarantees in HomeTone2066 hold at both
+     * extremes (primary &ge; 6:1, muted &ge; 4.8:1). backgroundTone
+     * is unchanged: the far bloom stops of dark heroes and every
+     * 2063–2065 regression pin still use it.
+     */
+    static final float MUTE_LIGHT_FACTOR = 0.85f;
+    static final float BRIGHTEN_LIGHT_FACTOR = 0.92f;
+    static final int MAX_LIGHT_CHANNEL = 235;
+    /** A snapped dark background is never brighter than this (target; empirical worst ~0.124). */
+    static final double DARK_SNAP_LUMINANCE = 0.12;
+    /** The lighten target for a snapped light background (the mix undershoots it for saturated
+     * greens — empirical worst ~0.47 — see the pageTone doc; the flip threshold is what
+     * matters, and it sits far from both). */
+    static final double LIGHT_SNAP_LUMINANCE = 0.55;
+    /** Below this luminance a mid tone snaps dark, above it light. */
+    static final double SNAP_DARK_BELOW = 0.30;
+
+    static int pageTone(int argb) {
+        int r = (argb >> 16) & 0xff;
+        int g = (argb >> 8) & 0xff;
+        int b = argb & 0xff;
+        int grey = (r + g + b) / 3;
+        int mr = Math.round(grey + (r - grey) * MUTE_LIGHT_FACTOR);
+        int mg = Math.round(grey + (g - grey) * MUTE_LIGHT_FACTOR);
+        int mb = Math.round(grey + (b - grey) * MUTE_LIGHT_FACTOR);
+        int br = Math.round(mr * BRIGHTEN_LIGHT_FACTOR);
+        int bg = Math.round(mg * BRIGHTEN_LIGHT_FACTOR);
+        int bb = Math.round(mb * BRIGHTEN_LIGHT_FACTOR);
+        int max = Math.max(br, Math.max(bg, bb));
+        if (max > MAX_LIGHT_CHANNEL) {
+            float scale = (float) MAX_LIGHT_CHANNEL / max;
+            br = Math.round(br * scale);
+            bg = Math.round(bg * scale);
+            bb = Math.round(bb * scale);
+        }
+        return snapTone(0xff000000 | (br << 16) | (bg << 8) | bb);
+    }
+
+    /**
+     * Pushes a tone out of the awkward middle: a tone whose relative
+     * luminance is in (0.12, 0.55) is darkened toward ~0.12 when below
+     * 0.30, or lightened toward ~0.55 when at/above 0.30. Tones already
+     * outside the band pass through untouched. The darken scale is
+     * (0.12/L)^(1/2.2) — luminance scales with roughly the 2.2 power
+     * of the channel scale — and the lighten mixes toward white by
+     * t = (0.55-L)/(1-L), which targets ~0.55. Both are approximate
+     * (luminance is nonlinear in channels): the empirical band after
+     * pageTone is dark &le; ~0.13 / light &ge; ~0.47 — still a wide
+     * empty middle around the 0.30 flip, which is what matters.
+     */
+    static int snapTone(int argb) {
+        double l = HomeTone2066.relativeLuminance(argb);
+        if (l <= DARK_SNAP_LUMINANCE || l >= LIGHT_SNAP_LUMINANCE) return argb;
+        int r = (argb >> 16) & 0xff;
+        int g = (argb >> 8) & 0xff;
+        int b = argb & 0xff;
+        if (l < SNAP_DARK_BELOW) {
+            double scale = Math.pow(DARK_SNAP_LUMINANCE / l, 1.0 / 2.2);
+            r = (int) Math.round(r * scale);
+            g = (int) Math.round(g * scale);
+            b = (int) Math.round(b * scale);
+        } else {
+            double t = (LIGHT_SNAP_LUMINANCE - l) / (1.0 - l);
+            r = (int) Math.round(r + (255 - r) * t);
+            g = (int) Math.round(g + (255 - g) * t);
+            b = (int) Math.round(b + (255 - b) * t);
+        }
+        return 0xff000000 | (clampChannel(r) << 16) | (clampChannel(g) << 8) | clampChannel(b);
+    }
+
+    private static int clampChannel(int c) {
+        return Math.max(0, Math.min(255, c));
+    }
+
     /** Linear per-channel interpolation; {@code t} is clamped to 0..1. */
     static int lerpColor(int from, int to, float t) {
         if (t <= 0f) return from;
@@ -287,8 +352,8 @@ final class HeroDiffusion2063 {
      * more ({@link #backgroundTone} applied to the tone itself) — a
      * deeper, greyer pass of the same hue, never grey and never black —
      * so the bloom fades outward without ever leaving the hero's colour
-     * family. The top bar takes the same tone (the bloom's top stop),
-     * so bar, hero and page are one continuous field.
+     * family. Kept for the 2063–2065 regression pins; the live home
+     * uses {@link #bloomColorsAnchored}.
      */
     static int[] bloomColors(int bg) {
         int far = backgroundTone(bg);
@@ -308,30 +373,30 @@ final class HeroDiffusion2063 {
     /**
      * mkoai 2.0.65: where the hero's bottom edge lands in the viewport
      * at rest, as a fraction of the viewport height (0 = top, 1 =
-     * bottom). The body stacks, top to bottom: the status bar, 8dp of
-     * body padding, the top bar ({@code barDp}), 4dp of hero-container
-     * padding, then the hero itself ({@code heroDp}). The fraction is
+     * bottom). The hero starts at the screen top in 2.0.66 (the top
+     * bar is a floating overlay now, not a band above the hero), so
+     * the only inputs are the hero's top offset ({@code heroTopDp},
+     * 0 at rest) and its height ({@code heroDp}). The fraction is
      * clamped to {@link #HOLD_FRACTION_MIN}..{@link #HOLD_FRACTION_MAX}:
      * below 0.40 the old bloom shape is kept, above 0.90 there would be
      * no room left for the fade at all.
      *
      * <p>Why this exists: the 2.0.64 bloom is viewport-fixed and holds
      * the tone only to 40% of the viewport, but the hero's bottom edge
-     * at rest lands at ~0.6–0.8 of the viewport (a 450–640dp hero under
-     * a 60dp bar) — right where the bloom has already faded toward the
-     * far colour — while the hero's bottom scrim ends at the full tone.
-     * That step is the seam the user sees at rest. Scrolling down a bit
-     * slides the hero's bottom edge up into the bloom's pure-tone zone,
-     * which is why the scrolled state already looked right. Anchoring
-     * the hold to the hero's bottom edge makes the rest state match the
-     * scrolled state: scrolling only ever moves the hero's bottom edge
-     * UP, deeper into the pure-tone zone, so the seam can never come
-     * back in any scroll position.
+     * at rest lands at ~0.6–0.8 of the viewport (a 450–640dp hero) —
+     * right where the bloom has already faded toward the far colour —
+     * while the hero's bottom scrim ends at the full tone. That step is
+     * the seam the user sees at rest. Scrolling down a bit slides the
+     * hero's bottom edge up into the bloom's pure-tone zone, which is
+     * why the scrolled state already looked right. Anchoring the hold
+     * to the hero's bottom edge makes the rest state match the scrolled
+     * state: scrolling only ever moves the hero's bottom edge UP,
+     * deeper into the pure-tone zone, so the seam can never come back
+     * in any scroll position.
      */
-    static float heroBottomFraction(
-            float statusBarDp, float barDp, float heroDp, float viewportDp) {
+    static float heroBottomFraction(float heroTopDp, float heroDp, float viewportDp) {
         if (viewportDp <= 0) return HOLD_FRACTION_MIN;
-        float f = (statusBarDp + 8f + barDp + 4f + heroDp) / viewportDp;
+        float f = (heroTopDp + heroDp) / viewportDp;
         return Math.max(HOLD_FRACTION_MIN, Math.min(HOLD_FRACTION_MAX, f));
     }
 
@@ -347,12 +412,17 @@ final class HeroDiffusion2063 {
      * the hold at the hero's bottom edge the hero's bottom scrim (which
      * ends at the full tone) meets exactly the tone behind it, in every
      * scroll position. The far colour is the same hue, deeper and
-     * greyer — never grey and never black.
+     * greyer — never grey and never black. mkoai 2.0.66: on a light
+     * page the far colour is {@link #pageTone} of the tone (a slightly
+     * deeper light tone, still light — the snap guarantees it), so the
+     * bloom never fades a light page down into darkness; on a dark
+     * page the far colour is still {@link #backgroundTone}, exactly
+     * today's look.
      */
     static int[] bloomColorsAnchored(int bg, float holdFraction) {
         float hold =
                 Math.max(HOLD_FRACTION_MIN, Math.min(HOLD_FRACTION_MAX, holdFraction));
-        int far = backgroundTone(bg);
+        int far = HomeTone2066.isLight(bg) ? pageTone(bg) : backgroundTone(bg);
         int[] out = new int[ANCHORED_BLOOM_STOPS];
         for (int i = 0; i < ANCHORED_BLOOM_STOPS; i++) {
             float pos = i / (float) (ANCHORED_BLOOM_STOPS - 1);

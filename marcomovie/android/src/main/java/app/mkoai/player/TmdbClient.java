@@ -238,6 +238,40 @@ final class TmdbClient {
     // ---- single-title lookup ----
 
     /**
+     * mkoai 2.0.66: disk-cache-only single-title lookup — the same item
+     * cache {@link #search} reads, but it never touches the network.
+     * The hero uses it to (a) prefer a landscape backdrop over the
+     * portrait poster and (b) fill the hero ratings row, using only
+     * what normal use already cached (poster / year enrichment and
+     * detail lookups populate the cache; the hero itself adds no
+     * requests). Tries the with-year key first, then the without-year
+     * key (a title cached without a year still matches). Returns null
+     * on a miss, an expired entry, a "miss" tombstone, or any failure —
+     * the caller keeps the source poster and hides the ratings row.
+     * Never throws.
+     */
+    static Item cachedSearch(File filesDir, String title, String year) {
+        if (title == null || title.trim().isEmpty()) return null;
+        try {
+            long now = System.currentTimeMillis();
+            JSONObject cache = loadCache(filesDir);
+            JSONObject items = cache == null ? null : cache.optJSONObject("items");
+            if (items == null) return null;
+            String[] keys = {itemKey(title, year), itemKey(title, "")};
+            for (String key : keys) {
+                JSONObject hit = items.optJSONObject(key);
+                if (hit == null) continue;
+                if (hit.optBoolean("miss", false)) continue;
+                if (now - hit.optLong("ts", 0) > ITEM_TTL_MS) continue;
+                Item it = Item.fromJson(hit.optJSONObject("it"));
+                if (it != null) return it;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /**
      * Find one title on TMDB (movie or tv). Language zh-TW first, then
      * zh-CN; query variants from the alias table + both scripts. Returns
      * null when nothing matches well enough — the caller keeps the

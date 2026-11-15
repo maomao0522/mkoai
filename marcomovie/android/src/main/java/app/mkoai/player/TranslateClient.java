@@ -48,10 +48,23 @@ public final class TranslateClient {
             return translated;
         } catch (WorkerApi.RateLimited rateLimited) {
             // DeepL quota exhausted (or any 429): fall back to MyMemory.
-            return translateViaMyMemory(text);
+            // If MyMemory also fails, the ORIGINAL RateLimited is
+            // rethrown (mkoai 2.0.66) so the caller still sees the
+            // DeepL quota error and can hide the translate button —
+            // swallowing it as MyMemory's IOException would make the
+            // quota invisible and the button would never hide.
+            try {
+                return translateViaMyMemory(text);
+            } catch (IOException fallbackFailed) {
+                throw rateLimited;
+            }
         } catch (IOException e) {
             if (e.getMessage() != null && e.getMessage().contains("deepl_quota_exhausted")) {
-                return translateViaMyMemory(text);
+                try {
+                    return translateViaMyMemory(text);
+                } catch (IOException fallbackFailed) {
+                    throw e;
+                }
             }
             throw e;
         }

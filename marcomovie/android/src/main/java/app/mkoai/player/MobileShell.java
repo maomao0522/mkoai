@@ -175,16 +175,49 @@ final class MobileShell {
     // the home tab, so it is only tinted while the home tab is active.
     private LinearLayout homeTopBar;
     private TopEdgeFadeView homeTopFade;
+    // mkoai 2.0.66: the bar is a floating overlay now — homeTopBar
+    // points at the overlay row, and the tone-following parts below are
+    // re-tinted in retintTopOverlay().
+    // The floating top overlay's tone-following parts — the pill +
+    // circles whose backgrounds take the page tone, the texts whose
+    // colour follows it, and the glyphs whose tint does. Rebuilt on
+    // every home render (cleared in buildHomeTopHeaderRow).
+    private LinearLayout homeTopPill;
+    private final java.util.List<View> homeTopToneBgs = new ArrayList<>();
+    private final java.util.List<TextView> homeTopToneTexts = new ArrayList<>();
+    private final java.util.List<NavGlyph> homeTopGlyphs = new ArrayList<>();
+    // mkoai 2.0.66: home text that follows the page tone — (view, role)
+    // pairs re-tinted when the light/dark state flips or a fresh build
+    // lands, never per animation frame. Roles: 0 = primary (section /
+    // card / hero title), 1 = muted (year line / subtitle / view-all /
+    // status). Views whose text sits on poster art (card titles, hero
+    // text, badges) are never registered — they keep their white +
+    // shadow look on the photo.
+    private static final int HOME_TEXT_PRIMARY = 0;
+    private static final int HOME_TEXT_MUTED = 1;
+    private final java.util.List<View> homeTextViews = new ArrayList<>();
+    private final java.util.List<Integer> homeTextRoles = new ArrayList<>();
+    private boolean homeTextDirty = false;
+    private boolean homeIsLight = false;
+    // mkoai 2.0.66: Continue Watching progress tracks, re-tinted with
+    // the page tone in the flip block (same pruning as the text list).
+    private final java.util.List<View> homeProgressTracks = new ArrayList<>();
     private final java.util.List<ImageView> heroArtworks = new ArrayList<>();
     private final java.util.List<View> heroScrims = new ArrayList<>();
-    // mkoai 2.0.65: the hero TOP fades — one per carousel page, in the
-    // same order as heroScrims. Each lays the page tone over the top of
-    // its artwork so the top bar melts into the hero (the mirror of the
-    // bottom scrim); re-tinted with the scrim in updateHeroScrim.
-    private final java.util.List<View> heroTopFades = new ArrayList<>();
     private final java.util.List<Cms.Video> heroCandidates = new ArrayList<>();
     private final java.util.Map<String, Integer> heroToneCache = new HashMap<>();
+    // mkoai 2.0.66: the hero ratings rows, one per carousel page (same
+    // order as heroScrims) — the lazy backdrop/ratings lookup reveals
+    // one when the TMDB disk cache yields a vote. And the artwork keys
+    // the lazy lookup has already resolved, so it runs once per page,
+    // never on every rotation.
+    private final java.util.List<TextView> heroRatings = new ArrayList<>();
+    private final java.util.Set<String> heroBackdropResolved = new java.util.HashSet<>();
     private LinearLayout floatingDock;
+    // mkoai 2.0.66: the bottom-edge veil behind the dock (kept as a field
+    // so the flip block in applyDiffusionFrame can re-tint it with the
+    // page tone; it used to be a render-local with a fixed dark base).
+    private BottomEdgeFadeView bottomEdgeFade;
     private final View[] navTabs = new View[5];
     private final TextView[] navLabels = new TextView[5];
     private final NavGlyph[] navIcons = new NavGlyph[5];
@@ -228,21 +261,103 @@ final class MobileShell {
             ambientCanvas.invalidate();
         }
         if (floatingDock != null) {
-            int intensity =
-                    a.prefs.getInt(
-                            Prefs.MOBILE_GLASS_INTENSITY,
-                            a.prefs.getBoolean(Prefs.REDUCED_TRANSPARENCY, false) ? 100 : 65);
-            int topAlpha = Math.round(0x88 + (intensity / 100f) * 0x6c);
-            int botAlpha = Math.round(0x7c + (intensity / 100f) * 0x74);
-            floatingDock.setBackground(
-                    glassBg(
-                            (topAlpha << 24) | 0x001b2421,
-                            (botAlpha << 24) | 0x00111715,
-                            a.dp(999),
-                            a.dp(0.9f),
-                            0x36ffffff));
+            floatingDock.setBackground(dockBackground());
             floatingDock.invalidate();
         }
+    }
+
+    /**
+     * mkoai 2.0.66: the floating dock's background. On the home tab it
+     * follows the page tone — a light pill (near-white gradient) on a
+     * light page, the fixed dark glass on a dark page — so the dock is
+     * never a dead-white pill on a light page or invisible on a dark
+     * one. Anywhere else it is the fixed dark glass (today's look).
+     * The glass-intensity alphas are respected in both cases, and the
+     * entries, size and tap handling never change.
+     */
+    private GradientDrawable dockBackground() {
+        int intensity =
+                a.prefs.getInt(
+                        Prefs.MOBILE_GLASS_INTENSITY,
+                        a.prefs.getBoolean(Prefs.REDUCED_TRANSPARENCY, false) ? 100 : 65);
+        int topAlpha = Math.round(0x88 + (intensity / 100f) * 0x6c);
+        int botAlpha = Math.round(0x7c + (intensity / 100f) * 0x74);
+        int topRgb;
+        int botRgb;
+        int stroke;
+        if (activeTab == 0) {
+            topRgb = HomeTone2066.dockTopRgb(heroDiffusionShown);
+            botRgb = HomeTone2066.dockBottomRgb(heroDiffusionShown);
+            stroke = HomeTone2066.dockStroke(heroDiffusionShown);
+        } else {
+            topRgb = 0x001b2421;
+            botRgb = 0x00111715;
+            stroke = 0x36ffffff;
+        }
+        return glassBg(
+                (topAlpha << 24) | topRgb,
+                (botAlpha << 24) | botRgb,
+                a.dp(999),
+                a.dp(0.9f),
+                stroke);
+    }
+
+    /** A dock label / glyph colour for the current page tone and selected state. */
+    private int dockLabelColor(boolean selected) {
+        int tone = activeTab == 0 ? heroDiffusionShown : HomeRows2061.HOME_SLATE_BG;
+        return HomeTone2066.dockLabel(tone, selected);
+    }
+
+    /** The active-tab lens for the current page tone (dark glass on a light pill, white glass otherwise). */
+    private GradientDrawable dockLensBg() {
+        int tone = activeTab == 0 ? heroDiffusionShown : HomeRows2061.HOME_SLATE_BG;
+        return glassBg(
+                HomeTone2066.dockLensTop(tone),
+                HomeTone2066.dockLensBottom(tone),
+                a.dp(20),
+                a.dp(0.8f),
+                HomeTone2066.dockLensStroke(tone));
+    }
+
+    /** Re-tints the dock's tabs (lens / labels / glyphs / weight) for the current tone + selection. */
+    private void retintDockTabs() {
+        // When on Search tab (1), highlight Home (0) in the 4-tab dock.
+        int highlightedDockTab = activeTab == 1 ? 0 : activeTab;
+        int[] dockTabList = dockTabs();
+        for (int pos = 0; pos < dockTabList.length; pos++) {
+            int i = dockTabList[pos];
+            boolean selected = i == highlightedDockTab;
+            if (navTabs[i] != null) {
+                navTabs[i].setBackground(selected ? dockLensBg() : null);
+            }
+            if (navLabels[i] != null) {
+                navLabels[i].setTextColor(dockLabelColor(selected));
+                navLabels[i].setTypeface(null, selected ? Typeface.BOLD : Typeface.NORMAL);
+            }
+            if (navIcons[i] != null) {
+                navIcons[i].setSelectedState(selected);
+                // setIconTint overrides the glyph's own selected colour,
+                // so the tint must be selected-aware too (see dockLabel).
+                navIcons[i].setIconTint(dockLabelColor(selected));
+            }
+        }
+    }
+
+    /**
+     * mkoai 2.0.66: re-tints the floating bottom dock for the current
+     * page tone — background, active-tab lens, labels and glyphs.
+     * Called from applyDiffusionFrame's flip block and from switchTab
+     * (selection changes re-tint the tabs). Cheap setBackground /
+     * setTextColor / setIconTint calls only; a tap never waits for any
+     * of this, and the dock never blocks content (it is a floating
+     * pill with a bottom margin, as before).
+     */
+    private void retintDock() {
+        if (floatingDock != null) {
+            floatingDock.setBackground(dockBackground());
+            floatingDock.invalidate();
+        }
+        retintDockTabs();
     }
 
     // Home tab state (persisted across MobileShell re-renders for the same active site)
@@ -983,6 +1098,7 @@ final class MobileShell {
 
             // Layer 3: Bottom edge subtle vignette behind the floating dock
             BottomEdgeFadeView bottomFade = new BottomEdgeFadeView(a);
+            bottomEdgeFade = bottomFade;
             bottomFade.setClickable(false);
             bottomFade.setFocusable(false);
             a.root.addView(
@@ -1044,14 +1160,36 @@ final class MobileShell {
     }
 
     /**
-     * Builds the iPhone Portrait Header Row inside the scrollable Home tab (or standalone top bar):
-     * Left brand logo + title, right Source selector capsule, Netdisk capsule, and circular Search
-     * icon button.
+     * mkoai 2.0.66: the floating top overlay (Emby style) — one tone
+     * pill (logo + source name) + separate floating round buttons
+     * (search / ⋯ / history / account) over the hero art. It is added
+     * to contentContainer (the FrameLayout holding the ScrollView), not
+     * to the scroll body, so the hero starts at the screen top and the
+     * overlay floats over it without scrolling away. The pill and the
+     * circles take solid tone backgrounds (not the dark a.glass), and
+     * their text / glyphs are re-tinted with the page tone in
+     * retintTopOverlay(). Layout order, sizes and actions are unchanged.
      */
     private View buildHomeTopHeaderRow() {
         LinearLayout bar = a.row();
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(a.dp(16), a.dp(6), a.dp(16), a.dp(6));
+
+        // The tone pill: brand + source in one floating pill (the
+        // Emby Terminus+C pill). Flexible width — it takes what the
+        // circles leave, and the source name truncates inside it.
+        LinearLayout pill = a.row();
+        pill.setTag("home-top-pill");
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        pill.setPadding(a.dp(6), 0, a.dp(6), 0);
+        pill.setElevation(a.dp(4));
+        homeTopPill = pill;
+        homeTopToneBgs.clear();
+        homeTopToneTexts.clear();
+        homeTopGlyphs.clear();
+        homeTopToneBgs.add(pill);
+        LinearLayout.LayoutParams pillLp = new LinearLayout.LayoutParams(0, a.dp(48), 1f);
+        pillLp.rightMargin = a.dp(6);
+        bar.addView(pill, pillLp);
 
         // Left: Brand Logo + Title
         LinearLayout brandRow = a.row();
@@ -1081,7 +1219,8 @@ final class MobileShell {
                     if (a.privateMode) PrivacySpace.switchSpace(a, false);
                     else PrivacySpace.logoTap(a);
                 });
-        bar.addView(brandRow, new LinearLayout.LayoutParams(-2, -2));
+        homeTopToneTexts.add(brandTitle);
+        pill.addView(brandRow, new LinearLayout.LayoutParams(-2, -2));
 
         // Flexible middle slot: keeps `sitePill` right-aligned and guarantees it shrinks/truncates
         // before ever pushing `netdiskPill` or `searchCircle` off the right edge of the screen.
@@ -1089,7 +1228,7 @@ final class MobileShell {
         LinearLayout.LayoutParams slotLp = new LinearLayout.LayoutParams(0, a.dp(34), 1f);
         slotLp.leftMargin = a.dp(8);
         slotLp.rightMargin = a.dp(6);
-        bar.addView(siteSlot, slotLp);
+        pill.addView(siteSlot, slotLp);
 
         // Right 1: Site selector Liquid Glass capsule (`source-switcher`)
         String siteLabel = currentSite != null ? currentSite.name + " ▾" : "選擇片源 ▾";
@@ -1102,7 +1241,9 @@ final class MobileShell {
         sitePill.setMaxWidth(maxSiteWidth);
         sitePill.setGravity(Gravity.CENTER);
         sitePill.setPadding(a.dp(11), a.dp(7), a.dp(11), a.dp(7));
-        a.glass(sitePill, 999);
+        // mkoai 2.0.66: no own glass background — the pill carries the
+        // tone, the source name is plain text on it (the Emby look).
+        homeTopToneTexts.add(sitePill);
         // mkoai 2.0.61: green ▶ prefix (reference app top pill). The ▶
         // span is applied after a.text() creates the view — a.text takes
         // a plain String, so styled text is set here.
@@ -1124,14 +1265,18 @@ final class MobileShell {
                 sitePill,
                 new FrameLayout.LayoutParams(-2, a.dp(34), Gravity.END | Gravity.CENTER_VERTICAL));
 
-        // Right 3: Circular Liquid Glass Search button (`nav-search`)
+        // Right 3: Circular Search button (`nav-search`) — a floating
+        // round button over the hero now, tone background (2.0.66).
         FrameLayout searchCircle = new FrameLayout(a);
         searchCircle.setTag("nav-search");
-        a.glass(searchCircle, 999);
+        searchCircle.setBackground(topPillBg(heroDiffusionShown));
+        searchCircle.setElevation(a.dp(4));
+        homeTopToneBgs.add(searchCircle);
         MobileDetailScreen.bindTouchFeedback(searchCircle);
         searchCircle.setOnClickListener(v -> switchTab(1));
         NavGlyph searchGlyph = new NavGlyph(a, 1);
         searchGlyph.setIconTint(0xfff3f4f6);
+        homeTopGlyphs.add(searchGlyph);
         searchCircle.addView(
                 searchGlyph, new FrameLayout.LayoutParams(a.dp(17), a.dp(17), Gravity.CENTER));
         searchCircle.setContentDescription("搜尋影片");
@@ -1142,10 +1287,13 @@ final class MobileShell {
         FrameLayout moreCircle = new FrameLayout(a);
         moreCircle.setTag("nav-more");
         moreCircle.setContentDescription("更多");
-        a.glass(moreCircle, 999);
+        moreCircle.setBackground(topPillBg(heroDiffusionShown));
+        moreCircle.setElevation(a.dp(4));
+        homeTopToneBgs.add(moreCircle);
         MobileDetailScreen.bindTouchFeedback(moreCircle);
         moreCircle.setOnClickListener(v -> switchTab(4));
         TextView moreGlyph = a.text("⋯", 17, 0xfff3f4f6);
+        homeTopToneTexts.add(moreGlyph);
         moreGlyph.setGravity(Gravity.CENTER);
         moreCircle.addView(moreGlyph, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         LinearLayout.LayoutParams moreLp = new LinearLayout.LayoutParams(a.dp(48), a.dp(48));
@@ -1159,12 +1307,15 @@ final class MobileShell {
         historyCircle.setContentDescription("觀看紀錄");
         historyCircle.setFocusable(true);
         if (android.os.Build.VERSION.SDK_INT >= 26) historyCircle.setTooltipText("觀看紀錄");
-        a.glass(historyCircle, 999);
+        historyCircle.setBackground(topPillBg(heroDiffusionShown));
+        historyCircle.setElevation(a.dp(4));
+        homeTopToneBgs.add(historyCircle);
         MobileDetailScreen.bindTouchFeedback(historyCircle);
         historyCircle.setOnClickListener(
                 v -> a.open(new MainActivity.Screen(a::historyPage), true));
         NavGlyph historyGlyph = new NavGlyph(a, 5);
         historyGlyph.setIconTint(0xfff3f4f6);
+        homeTopGlyphs.add(historyGlyph);
         historyGlyph.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         historyCircle.addView(
                 historyGlyph, new FrameLayout.LayoutParams(a.dp(25), a.dp(25), Gravity.CENTER));
@@ -1179,7 +1330,9 @@ final class MobileShell {
         if (signedIn) {
             FrameLayout accountCircle = new FrameLayout(a);
             accountCircle.setTag("nav-account");
-            a.glass(accountCircle, 999);
+            accountCircle.setBackground(topPillBg(heroDiffusionShown));
+            accountCircle.setElevation(a.dp(4));
+            homeTopToneBgs.add(accountCircle);
             MobileDetailScreen.bindTouchFeedback(accountCircle);
             accountCircle.setOnClickListener(
                     v ->
@@ -1194,6 +1347,7 @@ final class MobileShell {
                             : mail.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
             TextView initialTv = a.text(initial, 15, MainActivity.WHITE);
             initialTv.setGravity(Gravity.CENTER);
+            homeTopToneTexts.add(initialTv);
             accountCircle.addView(
                     initialTv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
             // mkoai 2.0.51: same 48dp circle as the search / history
@@ -1207,7 +1361,10 @@ final class MobileShell {
             loginPill.setTag("nav-account-login");
             loginPill.setGravity(Gravity.CENTER);
             loginPill.setPadding(a.dp(12), 0, a.dp(12), 0);
-            a.glass(loginPill, 999);
+            loginPill.setBackground(topPillBg(heroDiffusionShown));
+            loginPill.setElevation(a.dp(4));
+            homeTopToneBgs.add(loginPill);
+            homeTopToneTexts.add(loginPill);
             MobileDetailScreen.bindTouchFeedback(loginPill);
             loginPill.setOnClickListener(v -> SupabaseAuth.signInWithGoogle(a));
             // mkoai 2.0.51: same 48dp height as the neighbouring circles
@@ -1217,16 +1374,126 @@ final class MobileShell {
             bar.addView(loginPill, lpLp);
         }
 
-        // mkoai 2.0.64: the bar takes the current diffusion tone, so it
-        // reads as part of the same field as the hero and the page —
-        // colour only, layout and buttons unchanged. The first paint uses
-        // the shown tone (the slate until the first hero tone arrives),
-        // which is what the transparent bar showed before, so there is no
-        // flash; the animator keeps it in step from here on.
-        bar.setBackgroundColor(HeroDiffusion2063.topBarTone(heroDiffusionShown));
         homeTopBar = bar;
+        // The first paint uses the shown tone (the slate until the first
+        // hero tone arrives), so there is no flash; the animator keeps
+        // the pill and circles in step from here on.
+        retintTopOverlay(heroDiffusionShown);
 
         return bar;
+    }
+
+    /** The floating top pill / circle background for a page tone: the tone itself, pill radius, hairline stroke. */
+    private GradientDrawable topPillBg(int tone) {
+        return glassBg(tone, tone, a.dp(999), a.dp(1), HomeTone2066.topPillStroke(tone));
+    }
+
+    /**
+     * mkoai 2.0.66: re-tints the floating top overlay for a page tone —
+     * the pill and the circles take the tone as their background, the
+     * texts take the tone's primary colour, the glyphs take the same
+     * colour as their tint. On a light page the pill is near-white
+     * with dark text; on a dark page it is dark glass with white text
+     * (today's look). Called on every home build and from
+     * applyDiffusionFrame when the light/dark state flips (or a fresh
+     * build lands) — never per animation frame.
+     */
+    private void retintTopOverlay(int tone) {
+        // One drawable per view — a shared GradientDrawable instance
+        // would have its bounds clobbered by whichever view drew last.
+        for (View v : homeTopToneBgs) {
+            if (v != null) v.setBackground(topPillBg(tone));
+        }
+        int text = HomeTone2066.primaryText(tone);
+        for (TextView tv : homeTopToneTexts) {
+            if (tv != null) tv.setTextColor(text);
+        }
+        for (NavGlyph g : homeTopGlyphs) {
+            if (g != null) g.setIconTint(text);
+        }
+    }
+
+    /** Registers a home text view for tone-following re-tints (see the homeTextViews field). */
+    private void registerHomeText(View v, int role) {
+        if (v == null) return;
+        homeTextViews.add(v);
+        homeTextRoles.add(role);
+        homeTextDirty = true;
+        // Tint at once with the currently shown tone — a view registered
+        // after the last diffusion frame must never wait for the next
+        // one (a light hero would otherwise leave it white on light
+        // until the next rotation). The flip block re-tints everything
+        // when the tone itself changes.
+        if (v instanceof TextView) {
+            ((TextView) v).setTextColor(
+                    role == HOME_TEXT_MUTED
+                            ? HomeTone2066.mutedText(heroDiffusionShown)
+                            : HomeTone2066.primaryText(heroDiffusionShown));
+        }
+    }
+
+    /**
+     * mkoai 2.0.66: re-tints the registered home text for a page tone.
+     * Detached views (rebuilt rows leave dead entries behind) are
+     * pruned. Shadows are never touched here — registered views are
+     * built without a shadow (the tone itself guarantees the contrast),
+     * so dark text on a light page is never smudged by a black shadow.
+     */
+    private void retintHomeText(int tone) {
+        for (int i = homeTextViews.size() - 1; i >= 0; i--) {
+            View v = homeTextViews.get(i);
+            if (v == null || v.getWindowToken() == null) {
+                homeTextViews.remove(i);
+                homeTextRoles.remove(i);
+            }
+        }
+        for (int i = 0; i < homeTextViews.size(); i++) {
+            View v = homeTextViews.get(i);
+            if (!(v instanceof TextView)) continue;
+            int role = homeTextRoles.get(i);
+            ((TextView) v).setTextColor(
+                    role == HOME_TEXT_MUTED
+                            ? HomeTone2066.mutedText(tone)
+                            : HomeTone2066.primaryText(tone));
+        }
+        homeIsLight = HomeTone2066.isLight(tone);
+        homeTextDirty = false;
+    }
+
+    /** Re-tints the Continue Watching progress tracks for a page tone (prunes detached views). */
+    private void retintProgressTracks(int tone) {
+        int track = HomeTone2066.progressTrack(tone);
+        for (int i = homeProgressTracks.size() - 1; i >= 0; i--) {
+            View v = homeProgressTracks.get(i);
+            if (v == null || v.getWindowToken() == null) {
+                homeProgressTracks.remove(i);
+                continue;
+            }
+            v.setBackground(new android.graphics.drawable.ColorDrawable(track));
+        }
+    }
+
+    /** The quota-hide store: the app's SharedPreferences, via QuotaState2066's adapter. */
+    private QuotaState2066.Store quotaStore() {
+        return QuotaState2066.prefsStore(a.prefs);
+    }
+
+    /**
+     * mkoai 2.0.66: a chart fetch that stays hidden while its quota is
+     * out — returns null without touching the network, so a hidden row
+     * is never re-fetched on every home open (a null job hides the row,
+     * exactly like a failed fetch). Once the hide expires the next home
+     * open fetches normally (isHidden clears the expired entry — the
+     * re-test). A network failure never hides: only a recorded quota
+     * 429 writes a hideUntil, and this check only reads it.
+     */
+    private List<TmdbClient.Item> fetchChartItems(
+            String feature, java.util.concurrent.Callable<List<TmdbClient.Item>> fetch)
+            throws Exception {
+        if (QuotaState2066.isHidden(quotaStore(), feature, System.currentTimeMillis())) {
+            return null;
+        }
+        return fetch.call();
     }
 
     /**
@@ -1371,32 +1638,21 @@ final class MobileShell {
         // home restores the fixed near-black base at once (the tab swap
         // already changes all content, so no animation is needed here);
         // coming back home retints it through applyHeroDiffusion.
+        // mkoai 2.0.66: leaving home also restores the dark dock, the
+        // dark bottom veil and the white status-bar icons; coming back
+        // home re-tints them through applyDiffusionFrame's flip block
+        // (the fresh build marks the home text dirty, so the flip runs
+        // even when the tone itself is unchanged).
         if (nextTab != 0 && homeTopFade != null) {
             homeTopFade.setBaseColor(HeroDiffusion2063.TOP_FADE_FIXED_RGB);
         }
-        a.cancelPageRequests();
-        // When on Search tab (1), highlight Home (0) in the 4-tab dock
-        int highlightedDockTab = activeTab == 1 ? 0 : activeTab;
-        int[] dockTabList = dockTabs();
-        for (int pos = 0; pos < dockTabList.length; pos++) {
-            int i = dockTabList[pos];
-            boolean selected = i == highlightedDockTab;
-            if (navTabs[i] != null) {
-                if (selected) {
-                    navTabs[i].setBackground(
-                            glassBg(0x38ffffff, 0x1effffff, a.dp(20), a.dp(0.8f), 0x52ffffff));
-                } else {
-                    navTabs[i].setBackground(null);
-                }
-            }
-            if (navLabels[i] != null) {
-                navLabels[i].setTextColor(selected ? 0xffe34b58 : 0xffe5e7eb);
-                navLabels[i].setTypeface(null, selected ? Typeface.BOLD : Typeface.NORMAL);
-            }
-            if (navIcons[i] != null) {
-                navIcons[i].setSelectedState(selected);
-            }
+        if (nextTab != 0) {
+            if (bottomEdgeFade != null) bottomEdgeFade.setBaseColor(0x060a08);
+            applyStatusBarIcons(false);
+            homeTextDirty = true;
         }
+        a.cancelPageRequests();
+        retintDock();
         contentContainer.removeAllViews();
         switch (activeTab) {
             case 0:
@@ -1532,21 +1788,37 @@ final class MobileShell {
         contentContainer.addView(scrollView, new FrameLayout.LayoutParams(-1, -1));
         FrameLayout.LayoutParams badgeLp =
                 new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        badgeLp.topMargin = statusBarHeight() + a.dp(10);
+        // mkoai 2.0.66: the badge sits BELOW the floating top overlay
+        // (status bar + 8dp + 48dp overlay + 10dp), so it never covers
+        // the pill while pulling.
+        badgeLp.topMargin = statusBarHeight() + a.dp(66);
         contentContainer.addView(pullRefreshBadge, badgeLp);
+
+        // mkoai 2.0.66: the floating top overlay (Emby style) — one tone
+        // pill (logo + source) + separate floating round buttons over
+        // the hero. It lives on contentContainer, not in the scroll
+        // body, so it floats over the hero art and never scrolls away.
+        View topOverlay = buildHomeTopHeaderRow();
+        FrameLayout.LayoutParams overlayLp =
+                new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        overlayLp.topMargin = statusBarHeight() + a.dp(8);
+        overlayLp.leftMargin = a.dp(16);
+        overlayLp.rightMargin = a.dp(16);
+        contentContainer.addView(topOverlay, overlayLp);
 
         a.body = body;
         homeBody = body;
-        body.setPadding(0, statusBarHeight() + a.dp(8), 0, a.dp(106));
+        // mkoai 2.0.66: no top padding — the hero art starts at the
+        // screen top, under the status bar, with the floating overlay
+        // on top of it (the old statusBar + 8dp belonged to the bar
+        // that used to sit above the hero).
+        body.setPadding(0, 0, 0, a.dp(106));
         scrollView.addView(body, new ScrollView.LayoutParams(-1, -2));
-
-        // 1. Scrollable Top Header Row (Brand + Site Capsule + Netdisk Capsule + Search Icon)
-        body.addView(buildHomeTopHeaderRow(), new LinearLayout.LayoutParams(-1, -2));
 
         // 2. Featured Hero billboard ("今日首推") — Netflix-style: first on
         // the home, full-bleed edge to edge, above the home list.
         final FrameLayout heroContainer = new FrameLayout(a);
-        heroContainer.setPadding(0, a.dp(4), 0, 0);
+        heroContainer.setPadding(0, 0, 0, 0);
         heroContainer.setVisibility(View.GONE);
         body.addView(heroContainer, new LinearLayout.LayoutParams(-1, -2));
 
@@ -1571,6 +1843,8 @@ final class MobileShell {
         final TextView statusText = a.text("正在加载片单…", 13, MainActivity.MUTED);
         statusText.setGravity(Gravity.CENTER);
         statusText.setPadding(a.dp(16), a.dp(24), a.dp(16), a.dp(24));
+        // mkoai 2.0.66: a status line on the page tone — follows the tone.
+        registerHomeText(statusText, HOME_TEXT_MUTED);
         body.addView(statusText, new LinearLayout.LayoutParams(-1, -2));
 
         final LinearLayout gridContainer = a.vertical();
@@ -2314,23 +2588,33 @@ final class MobileShell {
         List<Cms.Video> heroList =
                 VideoKind2061.filterNonAnimeHero(candidates, heroTypeNames(site));
         if (heroList.isEmpty()) heroList = candidates;
+        // mkoai 2.0.66: the hero prefers recent titles (2 years) — recent
+        // first, older after, nothing dropped (fail-open: an older hero
+        // beats an empty hero). Year from Cms.Video.year (Cms.yearLabel
+        // normalisation); unknown year counts as not-recent (filler).
+        heroList = HomeYear2066.preferRecentForHero(heroList,
+                v -> v == null ? -1 : HomeYear2066.parseYear(v.year),
+                HomeYear2066.currentYear());
         // mkoai 2.0.63: record the carousel for hero diffusion — one
         // artwork + scrim per page, filled in by buildHeroShowcaseCard.
         heroCandidates.clear();
         heroCandidates.addAll(heroList);
         heroArtworks.clear();
         heroScrims.clear();
-        heroTopFades.clear();
+        heroRatings.clear();
+        heroBackdropResolved.clear();
         // mkoai 2.0.65: anchor the bloom's tone hold to the hero's
         // bottom edge at rest (see HeroDiffusion2063.heroBottomFraction)
         // — the rest state then looks like the scrolled state, because
         // scrolling only moves the hero's bottom edge up, deeper into
         // the pure-tone zone. The carousel page is max(240dp, the
         // window width), so the window width is the page width here.
+        // mkoai 2.0.66: the hero starts at the screen top now (no bar
+        // above it), so its top offset is 0 — only the hero height and
+        // the viewport matter.
         float density = a.getResources().getDisplayMetrics().density;
         heroDiffusionHoldFraction = HeroDiffusion2063.heroBottomFraction(
-                statusBarHeight() / density,
-                HeroDiffusion2063.HOME_TOP_BAR_HEIGHT_DP,
+                0f,
                 HeroDiffusion2063.heroHeightDp(a.windowWidth() / density),
                 a.windowHeight() / density);
         if (heroList.size() <= 1) {
@@ -2484,6 +2768,36 @@ final class MobileShell {
         return frame;
     }
 
+    /**
+     * mkoai 2.0.66: hero artwork binding (the 2.0.65 crop fix). The hero
+     * prefers the landscape backdrop (TMDB backdrop_path 16:9 — Emby's
+     * hero is a backdrop too); with a backdrop the artwork is FIT_START
+     * (a 16:9 strip at the top, the title block below it on the page
+     * tone). With only a portrait poster the artwork is FIT_CENTER —
+     * the whole 2:3 poster shows, centred, with the diffusion tone
+     * bleeding at the sides — never CENTER_CROP, which cut ~17% of the
+     * poster's height (the top "ALL'S FAIR" text in half, and the
+     * bottom too). The card's fixed height (the pager's) is unchanged;
+     * only the crop is gone. A backdrop that fails to load falls back
+     * to the poster (FIT_CENTER) through the same reliable path.
+     */
+    private void bindHeroArtwork(ImageView artwork, Cms.Video featured) {
+        String backdrop = featured.backdrop;
+        if (backdrop != null && !backdrop.isEmpty() && !ImageLoader.failed(backdrop)) {
+            artwork.setScaleType(ImageView.ScaleType.FIT_START);
+            artwork.setImageDrawable(new PosterPlaceholder(featured.title));
+            artwork.setContentDescription(featured.title + " 封面");
+            ImageLoader.onFailure(artwork, () -> {
+                artwork.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                bindReliablePoster(artwork, featured);
+            });
+            a.poster(backdrop, artwork);
+            return;
+        }
+        artwork.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        bindReliablePoster(artwork, featured);
+    }
+
     private View buildHeroShowcaseCard(final Cms.Site site, final Cms.Video featured) {
         FrameLayout card = new FrameLayout(a);
         card.setTag("hero-watch-now-button");
@@ -2494,9 +2808,8 @@ final class MobileShell {
         // into the page below.
         card.setBackgroundColor(heroDiffusionTarget);
         ImageView artwork = new ImageView(a);
-        artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bindHeroArtwork(artwork, featured);
         card.addView(artwork, new FrameLayout.LayoutParams(-1, -1));
-        bindReliablePoster(artwork, featured);
         if (homeAmbientView != null) homeAmbientView.follow(artwork);
         // mkoai 2.0.63: hero diffusion scrim — transparent over the top
         // ~60%, fading into the page colour over the bottom ~40%, so the
@@ -2509,20 +2822,11 @@ final class MobileShell {
         card.addView(gradient, new FrameLayout.LayoutParams(-1, -1));
         heroArtworks.add(artwork);
         heroScrims.add(gradient);
-        // mkoai 2.0.65: hero TOP fade — the mirror of the bottom scrim.
-        // The top bar is a flat band of the page tone sitting directly
-        // above the artwork, so without this the bar's bottom edge reads
-        // as a line against the photo's top edge. The fade lays the page
-        // tone over the top of the artwork (opaque at the top, gone by
-        // ~43% of the hero's height), so the photo emerges out of the
-        // bar's own colour; the content (bottom-gravity, title block at
-        // the bottom) is added after it and draws above it.
-        View topFade = new View(a);
-        topFade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                HeroDiffusion2063.topFadeColors(heroDiffusionTarget)));
-        topFade.setTag("hero-diffusion-topfade");
-        card.addView(topFade, new FrameLayout.LayoutParams(-1, -1));
-        heroTopFades.add(topFade);
+        // mkoai 2.0.66: the hero TOP fade is gone — the top bar is a
+        // floating overlay now, not a band above the hero, so there is
+        // no seam left to melt (the fade used to lay the page tone over
+        // the artwork's top ~43%, which also dimmed the poster's top
+        // edge). The bottom scrim is the only fade.
         LinearLayout content = a.vertical();
         content.setGravity(Gravity.CENTER_HORIZONTAL);
         content.setPadding(a.dp(24), a.dp(100), a.dp(24), a.dp(36));
@@ -2552,6 +2856,27 @@ final class MobileShell {
             summary.setLineSpacing(a.dp(3), 1f);
             content.addView(summary, new LinearLayout.LayoutParams(-1, -2));
         }
+        // mkoai 2.0.66: hero ratings (Emby info hierarchy) — TMDB first,
+        // Douban when the remarks carry it ("TMDB 8.4 · 豆瓣 9.1"). The
+        // line comes from the remarks the row builders already wrote
+        // ("★ 8.4", "8.4 分", "豆瓣 9.1 分"); the lazy backdrop/ratings
+        // lookup fills it from the cached TMDB vote when the remarks
+        // carry nothing. Hidden when there is no score at all — no blank
+        // placeholder, no "—". The text sits on the photo's bottom
+        // scrim, so it stays white like the title (never registered
+        // for tone-following).
+        TextView ratings = a.text("", 13, 0xffeeeeee);
+        ratings.setTag("hero-ratings");
+        ratings.setGravity(Gravity.CENTER);
+        ratings.setPadding(0, a.dp(10), 0, 0);
+        ratings.setVisibility(View.GONE);
+        String ratingsLine = HeroRatings2066.ratingsLine(featured.remarks, 0);
+        if (!ratingsLine.isEmpty()) {
+            ratings.setText(ratingsLine);
+            ratings.setVisibility(View.VISIBLE);
+        }
+        content.addView(ratings, new LinearLayout.LayoutParams(-1, -2));
+        heroRatings.add(ratings);
         // mkoai 2.0.61: no ▶ 播放 button on the hero (the reference app
         // has none) — tapping the card still opens the detail page.
         card.addView(content, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
@@ -2613,7 +2938,12 @@ final class MobileShell {
         heroDiffusionGen++;
         final int gen = heroDiffusionGen;
         Cms.Video v = heroCandidates.get(page);
-        String key = v.poster != null && !v.poster.isEmpty() ? v.poster : "title:" + v.title;
+        // mkoai 2.0.66: one-shot lazy backdrop / ratings resolution
+        // (disk cache only — see resolveHeroBackdrop).
+        resolveHeroBackdrop(page);
+        // mkoai 2.0.66: the tone follows the image actually shown — the
+        // backdrop when the hero has one, else the poster.
+        String key = heroArtworkKey(v);
         Integer cached = heroToneCache.get(key);
         if (cached != null) {
             heroDiffusionTarget = cached.intValue();
@@ -2627,6 +2957,78 @@ final class MobileShell {
         // is still loading, not a flat slate that jumps when the tone lands.
         applyDiffusionFrame();
         sampleHeroTone(page, key, gen, 0);
+    }
+
+    /** The tone-cache key for a hero video: the image actually shown (backdrop first, else poster). */
+    private static String heroArtworkKey(Cms.Video v) {
+        if (v == null) return "title:";
+        if (v.backdrop != null && !v.backdrop.isEmpty()) return v.backdrop;
+        if (v.poster != null && !v.poster.isEmpty()) return v.poster;
+        return "title:" + v.title;
+    }
+
+    /**
+     * mkoai 2.0.66: one-shot lazy backdrop / ratings resolution for hero
+     * page {@code page} — disk cache only (TmdbClient.cachedSearch, 7-day
+     * TTL, never the network), on the artwork pool, so the hero adds no
+     * requests and no new threads. If the cache yields a backdrop it is
+     * recorded on the Video (future builds use it directly) and the
+     * artwork is swapped to it — but ONLY while the poster has not
+     * decoded yet (the artwork still shows the placeholder); a decoded
+     * poster is never yanked mid-view, and it is already un-cropped
+     * (FIT_CENTER). The swap re-samples the tone under the backdrop key,
+     * and a cached TMDB vote reveals the ratings row. Runs once per
+     * artwork key (heroBackdropResolved), never on every rotation.
+     */
+    private void resolveHeroBackdrop(final int page) {
+        if (page < 0 || page >= heroCandidates.size()) return;
+        final Cms.Video v = heroCandidates.get(page);
+        if (v == null || v.title == null || v.title.trim().isEmpty()) return;
+        final String key = heroArtworkKey(v);
+        if (heroBackdropResolved.contains(key)) return;
+        heroBackdropResolved.add(key);
+        if (v.backdrop != null && !v.backdrop.isEmpty()) return;
+        final int gen = heroDiffusionGen;
+        try {
+            RequestScope.submit(a.artwork, () -> {
+                try {
+                    TmdbClient.Item hit = TmdbClient.cachedSearch(
+                            a.getFilesDir(), v.title, v.year);
+                    if (hit == null) return;
+                    final String backdrop = hit.backdrop;
+                    final double vote = hit.vote;
+                    a.runOnUiThread(() -> {
+                        if (gen != heroDiffusionGen || page != heroDiffusionPage) return;
+                        if (backdrop != null && !backdrop.isEmpty()) {
+                            v.backdrop = backdrop;
+                            if (page < heroArtworks.size()) {
+                                ImageView art = heroArtworks.get(page);
+                                if (art != null
+                                        && !(art.getDrawable() instanceof BitmapDrawable)) {
+                                    bindHeroArtwork(art, v);
+                                    sampleHeroTone(page, backdrop, gen, 0);
+                                }
+                            }
+                        }
+                        if (vote > 0 && page < heroRatings.size()) {
+                            TextView ratings = heroRatings.get(page);
+                            if (ratings != null && ratings.getVisibility() != View.VISIBLE) {
+                                String line = HeroRatings2066.ratingsLine(v.remarks, vote);
+                                if (!line.isEmpty()) {
+                                    ratings.setText(line);
+                                    ratings.setVisibility(View.VISIBLE);
+                                }
+                            }
+                        }
+                    });
+                } catch (Throwable ignored) {
+                    // Disk cache unreadable: keep the poster, hide the
+                    // ratings row — never a crash, never a retry storm.
+                }
+            });
+        } catch (Throwable ignored) {
+            // Artwork pool shut down (app closing): same as above.
+        }
     }
 
     /**
@@ -2668,17 +3070,24 @@ final class MobileShell {
 
     /**
      * mkoai 2.0.64: paint one diffusion frame — the home ScrollView
-     * background (the bloom gradient, re-tinted in place), the top bar
-     * background, and the top-edge fade's base colour, all from the
-     * currently shown tone, so the whole top of the home reads as one
-     * field. The fade is only tinted while the home tab is active; on
-     * any other tab it keeps its fixed near-black base (restored by
-     * switchTab), so a late animation frame can never tint the status
-     * veil over the search or settings page. Cheap setColors /
-     * setBackgroundColor / setBaseColor calls only — no new threads, no
-     * new scheduled work, no layout changes. The bloom drawable is
+     * background (the bloom gradient, re-tinted in place) and the
+     * top-edge fade's base colour, all from the currently shown tone, so
+     * the whole top of the home reads as one field. The fade is only
+     * tinted while the home tab is active; on any other tab it keeps its
+     * fixed near-black base (restored by switchTab), so a late animation
+     * frame can never tint the status veil over the search or settings
+     * page. Cheap setColors / setBaseColor calls only — no new threads,
+     * no new scheduled work, no layout changes. The bloom drawable is
      * created once and mutated per frame; the ScrollView keeps the same
      * drawable across rebuilds of its content.
+     *
+     * <p>mkoai 2.0.66: the tone-following chrome (top overlay, home
+     * text, dock, bottom veil, status-bar icons) is re-tinted ONLY when
+     * the light/dark state flips or a fresh build lands — never per
+     * animation frame. The per-frame work stays what it was (the bloom
+     * setColors above); the flip block is a handful of setTextColor /
+     * setBackground / setBaseColor calls, no layout, no invalidation
+     * storm.
      */
     private void applyDiffusionFrame() {
         if (homeScroll != null) {
@@ -2700,9 +3109,38 @@ final class MobileShell {
             }
             homeScroll.setBackground(heroBloomGradient);
         }
-        if (homeTopBar != null) homeTopBar.setBackgroundColor(heroDiffusionShown);
+        boolean light = HomeTone2066.isLight(heroDiffusionShown);
+        if (light != homeIsLight || homeTextDirty) {
+            retintTopOverlay(heroDiffusionShown);
+            retintHomeText(heroDiffusionShown);
+            retintProgressTracks(heroDiffusionShown);
+            retintDock();
+            applyStatusBarIcons(light);
+            if (bottomEdgeFade != null) bottomEdgeFade.setBaseColor(heroDiffusionShown);
+            homeIsLight = light;
+        }
         if (homeTopFade != null && activeTab == 0) {
             homeTopFade.setBaseColor(heroDiffusionShown);
+        }
+    }
+
+    /**
+     * mkoai 2.0.66: the status-bar icons follow the page tone — dark
+     * icons on a light hero background (the MainActivity leaves the
+     * status bar transparent with white icons, which are invisible on
+     * a light page), white icons on a dark one. LIGHT_STATUS_BAR is
+     * API 23+; below that the flag is ignored and the icons stay white.
+     * Restored to white by switchTab when leaving the home tab.
+     */
+    private void applyStatusBarIcons(boolean light) {
+        if (android.os.Build.VERSION.SDK_INT < 23) return;
+        try {
+            android.view.View decor = a.getWindow().getDecorView();
+            int vis = decor.getSystemUiVisibility();
+            int flag = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            int next = light ? (vis | flag) : (vis & ~flag);
+            if (next != vis) decor.setSystemUiVisibility(next);
+        } catch (Throwable ignored) {
         }
     }
 
@@ -2715,15 +3153,9 @@ final class MobileShell {
                 HeroDiffusion2063.scrimColors(color)));
         View parent = (View) scrim.getParent();
         if (parent != null) parent.setBackgroundColor(color);
-        // mkoai 2.0.65: the top fade follows the same colour, so the
-        // bar-to-hero seam stays invisible when the hero changes. The
-        // top-fade list is parallel to the scrim list (same size, same
-        // order), so the guard above covers it too.
-        if (page < heroTopFades.size()) {
-            View topFade = heroTopFades.get(page);
-            if (topFade != null) topFade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                    HeroDiffusion2063.topFadeColors(color)));
-        }
+        // mkoai 2.0.66: the hero TOP fade is gone (the top bar is a
+        // floating overlay now, not a band above the hero — there is no
+        // seam left to melt). The bottom scrim is the only fade.
     }
 
     /**
@@ -2775,7 +3207,10 @@ final class MobileShell {
                     if (small == null) return;
                     int[] px = new int[32 * 24];
                     small.getPixels(px, 0, 32, 0, 0, 32, 24);
-                    final int tone = HeroDiffusion2063.backgroundTone(
+                    // mkoai 2.0.66: the light-preserving page tone — a
+                    // light poster stays light (Emby), instead of being
+                    // forced dark by backgroundTone.
+                    final int tone = HeroDiffusion2063.pageTone(
                             HeroDiffusion2063.averageTone(px, px.length));
                     small.recycle();
                     art.post(() -> {
@@ -2864,6 +3299,15 @@ final class MobileShell {
         // built from. Category pages (renderVideoGrid) and search are
         // untouched: they take their own list, not this one.
         videos = VideoKind2061.filterRecommendations(videos);
+        // mkoai 2.0.66: the recommendation rule (hard) — home
+        // recommendation rows show ONLY titles from the last 4 years
+        // (2022+). Unknown year fails open (kept); a known older year
+        // is dropped. The Douban top-rated row is a recommendation row
+        // too — no exception. Continue Watching, search, category grids
+        // and favourites never pass through here.
+        videos = HomeYear2066.filterRecommendations(videos,
+                v -> v == null ? -1 : HomeYear2066.parseYear(v.year),
+                HomeYear2066.currentYear());
         // mkoai 2.0.51: never show the "no recommendations" copy while
         // the TMDB checks are still running or their rows are visible —
         // the rows below are still filling in (or already showing
@@ -2872,6 +3316,7 @@ final class MobileShell {
         if (videos.isEmpty() && !tmdbRowsLoading && !hasVisibleTmdbRows()) {
             TextView hint = a.text("目前没有已确认片源收录的推荐，可直接搜索作品或重新整理。", 14, 0xffb8c2bd);
             hint.setPadding(0, a.dp(24), 0, a.dp(20));
+            registerHomeText(hint, HOME_TEXT_MUTED);
             container.addView(hint);
         }
         java.util.LinkedHashMap<String, List<Cms.Video>> groups =
@@ -2897,8 +3342,11 @@ final class MobileShell {
         if (!videos.isEmpty()) {
             TextView top10Title = a.text("Top 10", 16, MainActivity.WHITE);
             top10Title.setTypeface(null, Typeface.BOLD);
-            top10Title.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
+            // mkoai 2.0.66: no shadow — the title sits on the page tone
+            // now, and the tone itself guarantees the contrast (a black
+            // shadow would smudge dark text on a light page).
             top10Title.setPadding(0, a.dp(14), 0, a.dp(8));
+            registerHomeText(top10Title, HOME_TEXT_PRIMARY);
             container.addView(top10Title);
             HorizontalScrollView top10Scroll = new HorizontalScrollView(a);
             top10Scroll.setHorizontalScrollBarEnabled(false);
@@ -2944,8 +3392,9 @@ final class MobileShell {
         if (!netflix.isEmpty()) {
             TextView netflixTitle = a.text("Netflix", 16, MainActivity.WHITE);
             netflixTitle.setTypeface(null, Typeface.BOLD);
-            netflixTitle.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
+            // mkoai 2.0.66: no shadow (see top10Title above).
             netflixTitle.setPadding(0, a.dp(14), 0, a.dp(8));
+            registerHomeText(netflixTitle, HOME_TEXT_PRIMARY);
             container.addView(netflixTitle);
             HorizontalScrollView netflixScroll = new HorizontalScrollView(a);
             netflixScroll.setHorizontalScrollBarEnabled(false);
@@ -2973,8 +3422,9 @@ final class MobileShell {
             // (Simplified) — do not s2t (see 2.0.18 garbled names).
             TextView sectionTitle = a.text(title, 16, MainActivity.WHITE);
             sectionTitle.setTypeface(null, Typeface.BOLD);
-            sectionTitle.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
+            // mkoai 2.0.66: no shadow (see top10Title above).
             sectionTitle.setPadding(0, a.dp(14), 0, a.dp(8));
+            registerHomeText(sectionTitle, HOME_TEXT_PRIMARY);
             container.addView(sectionTitle);
             HorizontalScrollView rowScroll = new HorizontalScrollView(a);
             rowScroll.setHorizontalScrollBarEnabled(false);
@@ -3014,8 +3464,9 @@ final class MobileShell {
         int shown = Math.min(10, items.size());
         TextView title = a.text("继续观看", 16, MainActivity.WHITE);
         title.setTypeface(null, Typeface.BOLD);
-        title.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
+        // mkoai 2.0.66: no shadow (see top10Title in renderHomeSections).
         title.setPadding(0, a.dp(14), 0, a.dp(8));
+        registerHomeText(title, HOME_TEXT_PRIMARY);
         container.addView(title);
         HorizontalScrollView rowScroll = new HorizontalScrollView(a);
         rowScroll.setHorizontalScrollBarEnabled(false);
@@ -3026,7 +3477,9 @@ final class MobileShell {
         rowScroll.addView(row);
         for (int i = 0; i < shown; i++) {
             WatchHistory.Entry e = items.get(i);
-            LinearLayout card = buildHistoryCard(e, 260, 146);
+            // mkoai 2.0.66: the horizontal card is 260x104 (thumb 68x104
+            // + text column), not the old 260x146 landscape crop.
+            LinearLayout card = buildHistoryCard(e, 260, 104);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(a.dp(260), -2);
             lp.rightMargin = a.dp(12);
             row.addView(card, lp);
@@ -3034,12 +3487,31 @@ final class MobileShell {
         container.addView(rowScroll, new LinearLayout.LayoutParams(-1, -2));
     }
 
-    /** One 繼續觀看 card: poster + progress bar (or 已看完 badge); tap resumes. */
+    /**
+     * mkoai 2.0.66: one 繼續觀看 card, Emby-style horizontal — a 2:3
+     * portrait thumb on the left, title + episode/time + progress bar
+     * in a column on the right. The old card was a landscape crop of a
+     * portrait poster (260x146 over a 2:3 image, ~17% of the height
+     * cut — the HEARTLAND card's bottom text cut in half) with a 3dp
+     * progress bar and an 11sp time line that were nearly invisible.
+     * The thumb is 68x104 (2:3, ~2% crop), the progress bar is 4dp
+     * across the full text column, and the time sits under the title
+     * where it can always be read. Tap resumes.
+     */
     private LinearLayout buildHistoryCard(
             final WatchHistory.Entry e, int cardWidthDp, int posterHeightDp) {
-        LinearLayout card = a.vertical();
+        LinearLayout card = a.row();
+        card.setGravity(Gravity.CENTER_VERTICAL);
         MobileDetailScreen.bindTouchFeedback(card);
         card.setOnClickListener(view -> a.resumeHistory(e));
+        boolean done = e.complete();
+        float frac = 0f;
+        if (!done && e.duration > 0 && e.position > 0) {
+            frac = Math.min(1f, (float) e.position / (float) e.duration);
+        }
+        // Left: the portrait thumb (2:3 — the poster's own ratio, so
+        // CENTER_CROP cuts ~2%, not ~17%).
+        int thumbWidthDp = 68;
         FrameLayout art = new FrameLayout(a);
         art.setBackground(glassBg(0xff1c2421, 0xff141a18, a.dp(12), 0, 0));
         art.setClipToOutline(true);
@@ -3051,31 +3523,15 @@ final class MobileShell {
         resumeVideo.title = e.title;
         resumeVideo.poster = e.poster;
         bindReliablePoster(img, resumeVideo);
-        TextView playOverlay = a.text("▷", 38, Color.WHITE);
+        TextView playOverlay = a.text("▷", 24, Color.WHITE);
         playOverlay.setGravity(Gravity.CENTER);
         playOverlay.setContentDescription("繼續播放 " + e.title);
         art.addView(playOverlay, new FrameLayout.LayoutParams(-1, -1));
-        // 2.0.40: year bottom-left. History entries carry no year, so it
-        // is filled from TMDB in the background when available. Added
-        // before the progress bar so the bar stays visible on top.
+        // 2.0.40: year bottom-left on the thumb. History entries carry
+        // no year, so it is filled from TMDB in the background when
+        // available.
         TextView yearTv = addPosterOverlay(a, art, null, null);
         enrichYearLabel(a, yearTv, e.title);
-        // Progress bar (or full bar when finished) at the poster's bottom edge.
-        boolean done = e.complete();
-        float frac = 0f;
-        if (!done && e.duration > 0 && e.position > 0) {
-            frac = Math.min(1f, (float) e.position / (float) e.duration);
-        }
-        if (done || frac > 0) {
-            FrameLayout progressWrap = new FrameLayout(a);
-            progressWrap.setBackground(
-                    new android.graphics.drawable.ColorDrawable(0x66000000));
-            View fill = new View(a);
-            fill.setBackground(new android.graphics.drawable.ColorDrawable(0xffe34b58));
-            int fillW = done ? cardWidthDp : Math.max(2, Math.round(cardWidthDp * frac));
-            progressWrap.addView(fill, new FrameLayout.LayoutParams(a.dp(fillW), a.dp(3)));
-            art.addView(progressWrap, new FrameLayout.LayoutParams(-1, a.dp(3), Gravity.BOTTOM));
-        }
         if (done) {
             TextView badge = a.text("已看完", 10, 0xfff5f7fa);
             badge.setTypeface(null, Typeface.BOLD);
@@ -3086,23 +3542,45 @@ final class MobileShell {
             badgeLp.setMargins(0, a.dp(6), a.dp(6), 0);
             art.addView(badge, badgeLp);
         }
-        card.addView(art, new LinearLayout.LayoutParams(-1, a.dp(posterHeightDp)));
+        card.addView(art, new LinearLayout.LayoutParams(a.dp(thumbWidthDp), a.dp(posterHeightDp)));
+        // Right: title + episode/time + progress bar, on the page tone
+        // (not on the poster) — so the text follows the tone.
+        LinearLayout col = a.vertical();
+        col.setPadding(a.dp(10), a.dp(4), a.dp(10), a.dp(4));
         TextView title = a.text(e.title, 13, 0xfff5f7fa);
         title.setTypeface(null, Typeface.BOLD);
-        title.setSingleLine(true);
+        title.setMaxLines(2);
         title.setEllipsize(TextUtils.TruncateAt.END);
-        title.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
-        title.setPadding(a.dp(1), a.dp(7), a.dp(1), 0);
-        card.addView(title);
+        registerHomeText(title, HOME_TEXT_PRIMARY);
+        col.addView(title, new LinearLayout.LayoutParams(-1, -2));
         String sub = a.historyLabel(e);
         if (sub != null && !sub.isEmpty()) {
             TextView subTv = a.text(sub, 11, 0xffc8ccd2);
             subTv.setSingleLine(true);
             subTv.setEllipsize(TextUtils.TruncateAt.END);
-            subTv.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
-            subTv.setPadding(a.dp(1), a.dp(2), a.dp(1), 0);
-            card.addView(subTv);
+            subTv.setPadding(0, a.dp(3), 0, 0);
+            registerHomeText(subTv, HOME_TEXT_MUTED);
+            col.addView(subTv, new LinearLayout.LayoutParams(-1, -2));
         }
+        // Progress bar (or full bar when finished) across the full text
+        // column — always visible, never overlaid on the poster.
+        if (done || frac > 0) {
+            FrameLayout progressWrap = new FrameLayout(a);
+            progressWrap.setBackground(
+                    new android.graphics.drawable.ColorDrawable(
+                            HomeTone2066.progressTrack(heroDiffusionShown)));
+            homeProgressTracks.add(progressWrap);
+            View fill = new View(a);
+            fill.setBackground(
+                    new android.graphics.drawable.ColorDrawable(HomeTone2066.PROGRESS_FILL));
+            int colWidthDp = cardWidthDp - thumbWidthDp - 20;
+            int fillW = done ? colWidthDp : Math.max(2, Math.round(colWidthDp * frac));
+            progressWrap.addView(fill, new FrameLayout.LayoutParams(a.dp(fillW), a.dp(4)));
+            LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(-1, a.dp(4));
+            barLp.topMargin = a.dp(8);
+            col.addView(progressWrap, barLp);
+        }
+        card.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
         return card;
     }
 
@@ -3232,15 +3710,25 @@ final class MobileShell {
                             if (HomeRows2061.isDoubanRow(row.kind))
                                 metadataJobs.add(() -> DoubanHome.fetchTopRatedItems());
                             else if (HomeRows2061.KIND_TRAKT_MOVIES.equals(row.kind))
-                                metadataJobs.add(() -> TraktHome.fetchMoviesItems());
+                                metadataJobs.add(() -> fetchChartItems(
+                                        QuotaState2066.TRAKT,
+                                        () -> TraktHome.fetchMoviesItems(quotaStore())));
                             else if (HomeRows2061.KIND_TRAKT_SHOWS.equals(row.kind))
-                                metadataJobs.add(() -> TraktHome.fetchShowsItems());
+                                metadataJobs.add(() -> fetchChartItems(
+                                        QuotaState2066.TRAKT,
+                                        () -> TraktHome.fetchShowsItems(quotaStore())));
                             else if (HomeRows2061.KIND_SIMKL_MOVIES.equals(row.kind))
-                                metadataJobs.add(() -> SimklHome.fetchMoviesItems());
+                                metadataJobs.add(() -> fetchChartItems(
+                                        QuotaState2066.SIMKL,
+                                        () -> SimklHome.fetchMoviesItems(quotaStore())));
                             else if (HomeRows2061.KIND_SIMKL_SHOWS.equals(row.kind))
-                                metadataJobs.add(() -> SimklHome.fetchTvItems());
+                                metadataJobs.add(() -> fetchChartItems(
+                                        QuotaState2066.SIMKL,
+                                        () -> SimklHome.fetchTvItems(quotaStore())));
                             else if (HomeRows2061.KIND_TVMAZE_TONIGHT.equals(row.kind))
-                                metadataJobs.add(() -> TvmazeHome.fetchTonightItems());
+                                metadataJobs.add(() -> fetchChartItems(
+                                        QuotaState2066.TVMAZE,
+                                        () -> TvmazeHome.fetchTonightItems(quotaStore())));
                             else
                                 metadataJobs.add(
                                         () -> TmdbClient.list(filesDir, row.kind, row.extra));
@@ -3286,6 +3774,22 @@ final class MobileShell {
                                 // once the cache is re-read. Empty /
                                 // unparseable dates fail open (kept).
                                 if (!AwwratedHome.isOldEnoughDate(it.date)) continue;
+                                // mkoai 2.0.66: the recommendation rule
+                                // (hard) — TMDB / chart / Douban rows show
+                                // ONLY titles from the last 4 years
+                                // (2022+). Unknown year fails open (kept).
+                                // The TVmaze tonight row is EXEMPT: its
+                                // year is the show's premiere year, not
+                                // the content's recency — a 2015 show
+                                // airing a new episode tonight IS new
+                                // content, and dropping it would break
+                                // the schedule's purpose. The view-all
+                                // pages read the same confirmed list, so
+                                // they inherit the rule.
+                                if (!HomeRows2061.isTvmazeRow(row.kind)
+                                        && !HomeYear2066.keepInRecommendations(
+                                                HomeYear2066.parseYear(it.year),
+                                                HomeYear2066.currentYear())) continue;
                                 Cms.Video v = TmdbClient.toVideo(it);
                                 // mkoai 2.0.61: 豆瓣高分 cards come from
                                 // Douban, not TMDB — tag them so the
@@ -3614,8 +4118,9 @@ final class MobileShell {
         if (anyCard) {
             TextView mediaTitle = a.text("我的媒体", 16, MainActivity.WHITE);
             mediaTitle.setTypeface(null, Typeface.BOLD);
-            mediaTitle.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
+            // mkoai 2.0.66: no shadow (see top10Title in renderHomeSections).
             mediaTitle.setPadding(0, a.dp(14), 0, a.dp(8));
+            registerHomeText(mediaTitle, HOME_TEXT_PRIMARY);
             mediaCardsContainerRef.addView(mediaTitle);
             LinearLayout cardsRow = a.row();
             cardsRow.setGravity(Gravity.TOP);
@@ -3726,10 +4231,13 @@ final class MobileShell {
         header.setPadding(0, a.dp(14), 0, a.dp(8));
         TextView title = a.text(row.title, 16, MainActivity.WHITE);
         title.setTypeface(null, Typeface.BOLD);
-        title.setShadowLayer(a.dp(3), 0, a.dp(1), 0xcc000000);
+        // mkoai 2.0.66: no shadow — the title sits on the page tone now
+        // (see top10Title in renderHomeSections).
+        registerHomeText(title, HOME_TEXT_PRIMARY);
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
         TextView all = a.text("查看全部 >", 13, HomeRows2061.VIEW_ALL_COLOR);
         all.setPadding(a.dp(8), a.dp(4), a.dp(2), a.dp(4));
+        registerHomeText(all, HOME_TEXT_MUTED);
         MobileDetailScreen.bindTouchFeedback(all);
         all.setOnClickListener(view -> openTmdbList(site, row.title, row));
         header.addView(all);
@@ -3948,8 +4456,22 @@ final class MobileShell {
     // reveals it when a year arrives.
     static TextView addPosterOverlay(
             MainActivity a, FrameLayout art, String remarks, String year) {
+        return addPosterOverlay(a, art, remarks, year, "");
+    }
+
+    /**
+     * mkoai 2.0.66: the 5-arg form renders the 「電影」/「劇」 type label
+     * as the bottom overlay row's first element — bottom-left, white
+     * bold text with a shadow on the same bottom scrim as the
+     * bottom-right ★ rating, no pill, no background — so the two sides
+     * balance (left: type [+ year on TV], right: rating). The 4-arg
+     * form (other cards) passes "" and renders exactly today's row.
+     */
+    static TextView addPosterOverlay(
+            MainActivity a, FrameLayout art, String remarks, String year, String typeLabel) {
         String y = Cms.yearLabel(year);
         boolean hasRemarks = remarks != null && !remarks.trim().isEmpty();
+        boolean hasType = typeLabel != null && !typeLabel.trim().isEmpty();
         FrameLayout bottomScrim = new FrameLayout(a);
         bottomScrim.setPadding(a.dp(7), a.dp(16), a.dp(7), a.dp(5));
         bottomScrim.setBackground(
@@ -3958,11 +4480,20 @@ final class MobileShell {
                         new int[] {0x00000000, 0xc8000000}));
         LinearLayout row = new LinearLayout(a);
         row.setOrientation(LinearLayout.HORIZONTAL);
+        if (hasType) {
+            TextView type = a.text(typeLabel.trim(), 10, 0xfff5f7fa);
+            type.setTypeface(null, Typeface.BOLD);
+            type.setSingleLine(true);
+            type.setShadowLayer(a.dp(2), 0, a.dp(1), 0xcc000000);
+            row.addView(type, new LinearLayout.LayoutParams(-2, -2));
+        }
         TextView yearTv = a.text(y, 10, 0xfff5f7fa);
         yearTv.setTypeface(null, Typeface.BOLD);
         yearTv.setSingleLine(true);
         if (y.isEmpty()) yearTv.setVisibility(View.GONE);
-        row.addView(yearTv, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams yearLp = new LinearLayout.LayoutParams(-2, -2);
+        if (hasType && !y.isEmpty()) yearLp.leftMargin = a.dp(6);
+        row.addView(yearTv, yearLp);
         if (hasRemarks) {
             TextView badge = a.text(remarks.trim(), 10, 0xfff5f7fa);
             badge.setTypeface(null, Typeface.BOLD);
@@ -3971,11 +4502,11 @@ final class MobileShell {
             badge.setGravity(Gravity.END);
             LinearLayout.LayoutParams badgeLp =
                     new LinearLayout.LayoutParams(0, -2, 1f);
-            if (!y.isEmpty()) badgeLp.leftMargin = a.dp(6);
+            if (!y.isEmpty() || hasType) badgeLp.leftMargin = a.dp(6);
             row.addView(badge, badgeLp);
         }
         bottomScrim.addView(row, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
-        if (y.isEmpty() && !hasRemarks) bottomScrim.setVisibility(View.GONE);
+        if (y.isEmpty() && !hasRemarks && !hasType) bottomScrim.setVisibility(View.GONE);
         art.addView(bottomScrim, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         return yearTv;
     }
@@ -4043,9 +4574,10 @@ final class MobileShell {
         bindReliablePoster(img, v);
         // mkoai 2.0.61: the year moves off the poster (only the remarks
         // badge stays on it) and under the title instead (reference app).
-        addPosterOverlay(a, art, v.remarks, null);
-        // 2.0.61 (j): 「電影」 / 「劇」 chip at the poster's top-left corner.
-        VideoKind2061.addTypeBadge(a, art, v);
+        // mkoai 2.0.66: the 「電影」/「劇」 label is the bottom overlay
+        // row's left element now (bottom-left, white bold + shadow, no
+        // pill — the top-left dark chip is gone).
+        addPosterOverlay(a, art, v.remarks, null, VideoKind2061.badgeLabel(v));
         card.addView(art, new LinearLayout.LayoutParams(-1, a.dp(posterHeightDp)));
         TextView title = a.text(v.title, 13, 0xfff5f7fa);
         title.setTypeface(null, Typeface.BOLD);
@@ -4064,6 +4596,10 @@ final class MobileShell {
             year.setSingleLine(true);
             year.setEllipsize(TextUtils.TruncateAt.END);
             year.setPadding(a.dp(1), a.dp(2), a.dp(1), 0);
+            // mkoai 2.0.66: the year line sits on the page tone under the
+            // title (not on the poster), so it follows the tone. The
+            // card title above it stays white + shadow on the poster.
+            registerHomeText(year, HOME_TEXT_MUTED);
             card.addView(year);
         }
         return card;
@@ -7747,9 +8283,23 @@ final class MobileShell {
     /** Soft bottom-edge vignette behind the floating Liquid Glass dock. */
     private static final class BottomEdgeFadeView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        // mkoai 2.0.66: the veil's base colour — fixed near-black by
+        // default (the 2.0.38 look); on the phone home it follows the
+        // page tone, so a light page does not get a dark band painted
+        // across its bottom behind the dock. Same pattern as
+        // TopEdgeFadeView: only the base colour varies.
+        private int baseRgb = 0x060a08;
 
         BottomEdgeFadeView(Context context) {
             super(context);
+        }
+
+        /** Retint the veil to a new base colour (same alphas/stops, new hue). */
+        void setBaseColor(int rgb) {
+            int next = rgb & 0x00ffffff;
+            if (baseRgb == next) return;
+            baseRgb = next;
+            invalidate();
         }
 
         @Override
@@ -7763,7 +8313,7 @@ final class MobileShell {
                             0,
                             0,
                             h,
-                            new int[] {0x00060a08, 0x90060a08, 0xe6060a08},
+                            HomeTone2066.bottomFadeColors(baseRgb),
                             new float[] {0f, 0.55f, 1f},
                             Shader.TileMode.CLAMP));
             canvas.drawRect(0, 0, w, h, paint);

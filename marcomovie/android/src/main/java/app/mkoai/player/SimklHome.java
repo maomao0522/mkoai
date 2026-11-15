@@ -54,12 +54,24 @@ final class SimklHome {
 
     /** mkoai 2.0.62: Simkl trending movies as home items. Throws on failure. */
     public static List<TmdbClient.Item> fetchMoviesItems() throws Exception {
-        return fetchSectionItems(MOVIES_URL, "電影", true);
+        return fetchSectionItems(MOVIES_URL, "電影", true, null);
+    }
+
+    /** mkoai 2.0.66: same, recording a quota 429 into {@code quota} (phone home rows). */
+    public static List<TmdbClient.Item> fetchMoviesItems(QuotaState2066.Store quota)
+            throws Exception {
+        return fetchSectionItems(MOVIES_URL, "電影", true, quota);
     }
 
     /** mkoai 2.0.62: Simkl trending TV as home items. Throws on failure. */
     public static List<TmdbClient.Item> fetchTvItems() throws Exception {
-        return fetchSectionItems(TV_URL, "影劇", false);
+        return fetchSectionItems(TV_URL, "影劇", false, null);
+    }
+
+    /** mkoai 2.0.66: same, recording a quota 429 into {@code quota} (phone home rows). */
+    public static List<TmdbClient.Item> fetchTvItems(QuotaState2066.Store quota)
+            throws Exception {
+        return fetchSectionItems(TV_URL, "影劇", false, quota);
     }
 
     /**
@@ -115,7 +127,24 @@ final class SimklHome {
      */
     private static List<TmdbClient.Item> fetchSectionItems(String path, String kind, boolean isMovie)
             throws Exception {
-        JSONArray data = trendingData(WorkerApi.getJson(path));
+        return fetchSectionItems(path, kind, isMovie, null);
+    }
+
+    private static List<TmdbClient.Item> fetchSectionItems(String path, String kind,
+            boolean isMovie, QuotaState2066.Store quota) throws Exception {
+        JSONArray data;
+        try {
+            data = trendingData(WorkerApi.getJson(path));
+        } catch (WorkerApi.RateLimited limited) {
+            // mkoai 2.0.66: 限流就記進 QuotaState 再拋出，首頁在
+            // retry_after 內不再重試（不再每次開首頁都打一次）。
+            if (quota != null) {
+                QuotaState2066.record(quota, QuotaState2066.SIMKL,
+                        limited.error, limited.source, limited.retryAfterOrNull,
+                        System.currentTimeMillis());
+            }
+            throw limited;
+        }
         List<TmdbClient.Item> items = new ArrayList<>();
         List<String> titles = new ArrayList<>();
         for (int i = 0; i < data.length() && items.size() < PER_SECTION; i++) {

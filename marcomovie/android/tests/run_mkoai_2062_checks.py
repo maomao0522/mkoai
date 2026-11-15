@@ -139,8 +139,9 @@ def main():
           "(1) TraktHome fetches trending movies + shows")
     check("/api/trakt?type=\" + type + \"&list=trending" in tr,
           "(1) TraktHome calls /api/trakt trending")
-    check("list=popular" in tr and "catch (WorkerApi.RateLimited" in tr,
-          "(1) trending 429 falls back to popular exactly once (RateLimited catch)")
+    check('"&list=popular"' not in tr and "catch (WorkerApi.RateLimited" in tr
+          and "QuotaState2066.record" in tr,
+          "(1) trending 429 records the quota and rethrows — no popular fallback (2.0.66)")
     check("MAX_ITEMS = 20" in tr, "(1) Trakt rows cap at 20 items")
     check("fetchMoviesVideos" in tr and "fetchShowsVideos" in tr,
           "(1) TraktHome has the TV Video variants")
@@ -149,8 +150,8 @@ def main():
     check("BoundedBatch.run" in tr and "3000" in tr,
           "(1) Trakt Fanart poster fill has a hard 3s budget")
     check("optInt(\"tvdb\"" in tr, "(1) Trakt keeps the TVDB id for show posters")
-    check(tr.count("WorkerApi.getJson(\"/api/trakt") == 2,
-          "(1) Trakt calls the Worker exactly twice (trending + popular fallback), never loops")
+    check(tr.count("WorkerApi.getJson(\"/api/trakt") == 1,
+          "(1) Trakt calls the Worker exactly once (trending only), never loops, no fallback")
 
     # ---- Static: (2) TVmaze ----
     tv = read("TvmazeHome.java")
@@ -443,13 +444,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.65"' in ev and "20066" in ev, "edition-versions.json = 2.0.65 / 20066")
+    check('"2.0.66"' in ev and "20067" in ev, "edition-versions.json = 2.0.66 / 20067")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.65"' in man and 'android:versionCode="20066"' in man,
-          "AndroidManifest.xml = 2.0.65 / 20066")
+    check('android:versionName="2.0.66"' in man and 'android:versionCode="20067"' in man,
+          "AndroidManifest.xml = 2.0.66 / 20067")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

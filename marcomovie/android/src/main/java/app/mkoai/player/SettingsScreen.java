@@ -1206,22 +1206,61 @@ final class SettingsScreen {
         // so a failure is expected and just shown.
         sectionTitle("分析與推播");
         toggle("使用分析", Prefs.ANALYTICS_ENABLED, true, null);
-        link(
-                "推播測試",
-                "發送一則測試通知到 ntfy",
-                "settings-push-test",
-                () ->
-                        a.worker.execute(
-                                () -> {
-                                    try {
-                                        NotifyClient.sendTest("mkoai 測試通知", "這是 mkoai 的推播測試。");
-                                        a.ui.post(() -> a.toast("已發送測試通知"));
-                                    } catch (Exception e) {
-                                        final String reason =
-                                                e.getMessage() == null ? "未知原因" : e.getMessage();
-                                        a.ui.post(() -> a.toast("推播測試失敗：" + reason));
-                                    }
-                                }));
+        // mkoai 2.0.66: while the ntfy rate limit is out the test link
+        // stays hidden (it returns after the retry_after window). A
+        // network failure never hides it.
+        if (!QuotaState2066.isHidden(
+                QuotaState2066.prefsStore(a.prefs),
+                QuotaState2066.NOTIFY, System.currentTimeMillis())) {
+            link(
+                    "推播測試",
+                    "發送一則測試通知到 ntfy",
+                    "settings-push-test",
+                    () ->
+                            a.worker.execute(
+                                    () -> {
+                                        try {
+                                            NotifyClient.sendTest("mkoai 測試通知", "這是 mkoai 的推播測試。");
+                                            a.ui.post(() -> a.toast("已發送測試通知"));
+                                        } catch (WorkerApi.HttpError e) {
+                                            // 502 notify_failed with an upstream
+                                            // 429 inside = ntfy rate limit — the
+                                            // retry_after is read from the BODY,
+                                            // not the status. The record's return
+                                            // decides the hide: a real window hides
+                                            // the link, an unreadable one hides
+                                            // nothing (fail-open).
+                                            if (e.status == 502
+                                                    && "notify_failed".equals(e.error)) {
+                                                long until = QuotaState2066.record(
+                                                        QuotaState2066.prefsStore(a.prefs),
+                                                        QuotaState2066.NOTIFY,
+                                                        e.error, null, e.retryAfterOrNull,
+                                                        System.currentTimeMillis());
+                                                a.ui.post(
+                                                        () -> {
+                                                            a.toast("推播限流，稍後再試");
+                                                            if (until > 0 && a.root != null) {
+                                                                android.view.View row =
+                                                                        a.root.findViewWithTag(
+                                                                                "settings-push-test");
+                                                                if (row != null) {
+                                                                    row.setVisibility(View.GONE);
+                                                                }
+                                                            }
+                                                        });
+                                                return;
+                                            }
+                                            final String reason =
+                                                    e.getMessage() == null ? "未知原因" : e.getMessage();
+                                            a.ui.post(() -> a.toast("推播測試失敗：" + reason));
+                                        } catch (Exception e) {
+                                            final String reason =
+                                                    e.getMessage() == null ? "未知原因" : e.getMessage();
+                                            a.ui.post(() -> a.toast("推播測試失敗：" + reason));
+                                        }
+                                    }));
+        }
         a.paragraph(
                 "ntfy topic："
                         + NotifyClient.TOPIC

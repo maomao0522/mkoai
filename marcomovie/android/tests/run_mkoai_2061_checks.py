@@ -225,12 +225,14 @@ def main():
     check("selectAllSources" in sp_picker and "remove(Prefs.SELECTED_SITE)" in sp_picker,
           "(i) 全部片源 still returns to the merged view")
 
-    # ---- Static: (j) card type labels ----
-    check("addTypeBadge" in vk and "badgeLabel" in vk,
-          "(j) VideoKind2061 has the badge helper + label")
+    # ---- Static: (j) card type labels (2.0.66: bottom-left, no pill) ----
+    check("addTypeBadge" not in vk and "badgeLabel" in vk,
+          "(j) VideoKind2061 keeps badgeLabel; addTypeBadge is deleted (2.0.66)")
     check("電影" in vk and "劇" in vk, "(j) the badge labels are 電影 / 劇")
-    check("addTypeBadge" in ms, "(j) the phone home cards get the type badge")
-    check("addTypeBadge" in hs, "(j) the TV home cards get the type badge")
+    check("addPosterOverlay(a, art, v.remarks, null, VideoKind2061.badgeLabel(v))" in ms,
+          "(j) the phone home cards pass the type label into the bottom overlay row")
+    check("VideoKind2061.badgeLabel(video)" in hs,
+          "(j) the TV home cards pass the type label into the bottom overlay row")
 
     # ---- Static: (k) ad-rule sources are the top preference ----
     spref = read("SourcePreferences.java")
@@ -312,13 +314,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.65"' in ev and "20066" in ev, "edition-versions.json = 2.0.65 / 20066")
+    check('"2.0.66"' in ev and "20067" in ev, "edition-versions.json = 2.0.66 / 20067")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.65"' in man and 'android:versionCode="20066"' in man,
-          "AndroidManifest.xml = 2.0.65 / 20066")
+    check('android:versionName="2.0.66"' in man and 'android:versionCode="20067"' in man,
+          "AndroidManifest.xml = 2.0.66 / 20067")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

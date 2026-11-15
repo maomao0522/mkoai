@@ -2542,6 +2542,17 @@ final class PlaybackControls {
         labels.add("匯入字幕檔案…");
         // mkoai 2.0.62: online subtitle search (SubDL + OpenSubtitles via
         // the Worker). Index trackEnd+3 — the entry after the file import.
+        //
+        // mkoai 2.0.66: this entry is deliberately NOT quota-hidden.
+        // The Worker absorbs provider 429s on the search route (tries
+        // the other provider and still returns 200, possibly with empty
+        // results), and the download quota has no 429 mapping at all
+        // (a spent download comes back as a 502, indistinguishable from
+        // a network failure at the app level). Hiding on those signals
+        // would hide on network failures, which the quota rule forbids.
+        // Hiding subtitles needs a Worker-side quota marker — out of
+        // scope for 2.0.66 (the Worker is untouched). QuotaState2066
+        // already has the SUBTITLE feature slot for that future writer.
         labels.add("搜尋字幕…");
         choose(
                 "CC",

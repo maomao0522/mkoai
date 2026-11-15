@@ -2,9 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package app.mkoai.player;
 
-import android.view.Gravity;
-import android.widget.FrameLayout;
-import android.widget.TextView;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -24,9 +21,11 @@ import java.util.List;
  *       away), while a title whose category is known but is neither movie
  *       nor series (sports, music, live, …) is dropped.
  *   </li>
- *   <li>(j) {@link #badgeLabel(Cms.Video)} / {@link #addTypeBadge} — every
- *       home/recommendation card shows 「電影」 for a movie and 「劇」 for a
- *       drama/series. Unknown type gets no label rather than a wrong guess.
+ *   <li>(j) {@link #badgeLabel(Cms.Video)} — every home/recommendation
+ *       card shows 「電影」 for a movie and 「劇」 for a drama/series.
+ *       Unknown type gets no label rather than a wrong guess. The label
+ *       is rendered bottom-left in the poster's bottom overlay row
+ *       (2.0.66; was a top-left dark pill before).
  *   </li>
  *   <li>2.0.63 {@link #isAnime(Cms.Video)} / {@link #filterNonAnime} — the
  *       phone-home hero never headlines anime (animation categories in
@@ -56,8 +55,7 @@ import java.util.List;
  * not a category, so it must never imply "series". The category is matched in
  * both scripts （電影/电视剧/综艺/动漫 and 电影/電視劇/綜藝/動漫）.
  *
- * <p>All methods except {@link #addTypeBadge} are pure (no Android) and
- * JVM-tested by HomeRows2061Checks.
+ * <p>All methods are pure (no Android) and JVM-tested by HomeRows2061Checks.
  */
 final class VideoKind2061 {
     private VideoKind2061() {}
@@ -230,25 +228,14 @@ final class VideoKind2061 {
                 "儿童", "兒童", "少儿", "少兒", "幼儿", "幼兒");
     }
 
-    // (j): small 「電影」/「劇」 chip at the poster's top-start corner.
-    // No-op when the type is not movie/series. The poster art is already a
-    // FrameLayout on both the phone and the TV cards, so the chip sits above
-    // the image and inside the poster's rounded outline.
-    static void addTypeBadge(MainActivity a, FrameLayout art, Cms.Video v) {
-        String label = badgeLabel(v);
-        if (label.isEmpty() || art == null || a == null) return;
-        TextView badge = a.text(label, a.isTvDevice() ? 13 : 11, 0xffffffff);
-        badge.setTypeface(
-                android.graphics.Typeface.DEFAULT_BOLD);
-        badge.setSingleLine(true);
-        badge.setGravity(Gravity.CENTER);
-        badge.setPadding(a.dp(7), a.dp(3), a.dp(7), a.dp(3));
-        badge.setBackground(a.bg(0xcc1f2937, 999));
-        FrameLayout.LayoutParams lp =
-                new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
-        lp.setMargins(a.dp(6), a.dp(6), 0, 0);
-        art.addView(badge, lp);
-    }
+    // (j): the 「電影」/「劇」 label — see {@link #badgeLabel}. mkoai
+    // 2.0.66: it is no longer a chip of its own (the top-left dark pill
+    // is gone). The label is rendered as the left element of the
+    // poster's bottom overlay row (MobileShell.addPosterOverlay's
+    // 5-arg overload) — bottom-left, white bold text with a shadow on
+    // the same bottom scrim as the bottom-right ★ rating, no pill, no
+    // background — so the two sides balance. The phone home card and
+    // the TV home card both call that overload with badgeLabel(v).
 
     // --- word matching (both scripts) -------------------------------------
 

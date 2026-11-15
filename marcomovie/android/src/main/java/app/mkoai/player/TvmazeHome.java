@@ -51,13 +51,30 @@ final class TvmazeHome {
      * Throws on failure.
      */
     public static List<TmdbClient.Item> fetchTonightItems() throws IOException {
+        return fetchTonightItems(null);
+    }
+
+    /** mkoai 2.0.66: same, recording a quota 429 into {@code quota} (phone home rows). */
+    public static List<TmdbClient.Item> fetchTonightItems(QuotaState2066.Store quota)
+            throws IOException {
         SimpleDateFormat dayFmt = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
         dayFmt.setTimeZone(TAIPEI);
         Date now = new Date();
         String today = dayFmt.format(now);
         String tomorrow = dayFmt.format(new Date(now.getTime() + 24L * 3600 * 1000));
-        JSONObject res =
-                WorkerApi.getJson("/api/tvmaze?list=schedule&country=US&date=" + today);
+        JSONObject res;
+        try {
+            res = WorkerApi.getJson("/api/tvmaze?list=schedule&country=US&date=" + today);
+        } catch (WorkerApi.RateLimited limited) {
+            // mkoai 2.0.66: 限流就記進 QuotaState 再拋出，首頁在
+            // retry_after 內不再重試。
+            if (quota != null) {
+                QuotaState2066.record(quota, QuotaState2066.TVMAZE,
+                        limited.error, limited.source, limited.retryAfterOrNull,
+                        System.currentTimeMillis());
+            }
+            throw limited;
+        }
         JSONArray data = res.optJSONArray("data");
         List<Entry> entries = new ArrayList<>();
         if (data != null) {

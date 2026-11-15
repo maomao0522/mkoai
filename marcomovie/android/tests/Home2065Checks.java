@@ -8,10 +8,11 @@ package app.mkoai.player;
  *  heroHeightDp — the same tall/short clamps the carousel uses
  *      (420dp shortest, 640dp tallest, 1.25x the page width between)
  *  heroBottomFraction — where the hero's bottom edge lands in the
- *      viewport at rest (status bar + 8dp body pad + 60dp bar + 4dp
- *      hero pad + hero, over the viewport), clamped to 0.40..0.90.
- *      A POCO F5-ish phone (393dp wide, 873dp tall, 24dp status bar)
- *      lands at ~0.67 — the hero ends well below the old bloom's
+ *      viewport at rest (mkoai 2.0.66: the hero starts at the screen
+ *      top now, so the fraction takes only (heroTopDp, heroDp,
+ *      viewportDp); a POCO F5-ish phone lands at ~0.56), clamped to
+ *      0.40..0.90. A POCO F5-ish phone (393dp wide, 873dp tall)
+ *      lands at ~0.56 — the hero ends well below the old bloom's
  *      0.40 hold, which is the seam the rest state showed.
  *  bloomColorsAnchored — 8 stops: the tone holds at full strength
  *      down to the hold fraction (the hero's bottom edge at rest),
@@ -68,20 +69,21 @@ public class Home2065Checks {
                 "heroHeightDp: a wide page clamps to the 640dp tallest hero");
 
         // ---- heroBottomFraction ----
-        eq((int) HeroDiffusion2063.HOME_TOP_BAR_HEIGHT_DP, 60,
-                "heroBottomFraction: the top bar is 60dp (48dp circles + 6 + 6 padding)");
-        // POCO F5-ish: status 24 + body pad 8 + bar 60 + hero pad 4 +
-        // hero 491.25 = 587.25dp over an 873dp viewport.
-        near(HeroDiffusion2063.heroBottomFraction(24f, 60f, 491.25f, 873f),
-                0.6727f, 0.002f,
-                "heroBottomFraction: a POCO F5-ish rest state lands at ~0.67, not 0.40");
-        check(HeroDiffusion2063.heroBottomFraction(24f, 60f, 491.25f, 873f) > 0.40f,
+        // mkoai 2.0.66: the 4-arg form is gone with the flat top bar —
+        // the hero starts at the screen top now, so the fraction takes
+        // only (heroTopDp, heroDp, viewportDp). A POCO F5-ish phone
+        // (393dp wide, 873dp tall): hero top 0 + hero 491.25 = 491.25dp
+        // over an 873dp viewport.
+        near(HeroDiffusion2063.heroBottomFraction(0f, 491.25f, 873f),
+                0.5627f, 0.002f,
+                "heroBottomFraction: a POCO F5-ish rest state lands at ~0.56, not 0.40");
+        check(HeroDiffusion2063.heroBottomFraction(0f, 491.25f, 873f) > 0.40f,
                 "heroBottomFraction: the rest hero ends below the old bloom's 0.40 hold (the seam)");
-        eq((int) (HeroDiffusion2063.heroBottomFraction(24f, 60f, 420f, 2000f) * 100), 40,
+        eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 420f, 2000f) * 100), 40,
                 "heroBottomFraction: a very tall viewport clamps the hold to 0.40");
-        eq((int) (HeroDiffusion2063.heroBottomFraction(24f, 60f, 491f, 500f) * 100), 90,
+        eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 491f, 500f) * 100), 90,
                 "heroBottomFraction: a very short viewport clamps the hold to 0.90");
-        eq((int) (HeroDiffusion2063.heroBottomFraction(24f, 60f, 491f, 0f) * 100), 40,
+        eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 491f, 0f) * 100), 40,
                 "heroBottomFraction: a zero viewport never divides, holds 0.40");
 
         // ---- bloomColorsAnchored: hold 0.40 (the old shape) ----
@@ -105,12 +107,14 @@ public class Home2065Checks {
         check(black[0] == 0xff000000 && black[4] == 0xff000000 && black[7] == 0xff000000,
                 "bloomColorsAnchored: a black tone blooms to black everywhere");
 
-        // ---- bloomColorsAnchored: the POCO hold (~0.67) ----
-        int[] poco = HeroDiffusion2063.bloomColorsAnchored(tone, 0.6727f);
+        // ---- bloomColorsAnchored: the POCO hold (~0.56, 2.0.66) ----
+        // The hero starts at the screen top now, so the rest hold is
+        // 491.25/873 ≈ 0.5627 (was 0.6727 with the flat bar above it).
+        int[] poco = HeroDiffusion2063.bloomColorsAnchored(tone, 0.5627f);
         check(poco[0] == tone && poco[1] == tone && poco[2] == tone
-                        && poco[3] == tone && poco[4] == tone,
+                        && poco[3] == tone,
                 "bloomColorsAnchored: at the POCO hold the tone is still full at the hero's bottom edge");
-        check(poco[5] != tone && poco[6] != tone,
+        check(poco[4] != tone && poco[5] != tone,
                 "bloomColorsAnchored: at the POCO hold the fade starts only below the hero");
         eq(poco[7], far,
                 "bloomColorsAnchored: at the POCO hold the bottom is still the far colour");

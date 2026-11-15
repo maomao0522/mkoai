@@ -1084,6 +1084,32 @@ final class MobileDetailScreen {
                                                                     View.VISIBLE);
                                                             translateBtn.setVisibility(View.GONE);
                                                         });
+                                            } catch (WorkerApi.RateLimited rateLimited) {
+                                                // mkoai 2.0.66: DeepL quota (or MyMemory
+                                                // also failed — TranslateClient rethrows
+                                                // the original DeepL RateLimited). The
+                                                // record's return decides the hide: a
+                                                // real quota signal hides the button until
+                                                // it returns (24h auto-restore + re-test);
+                                                // an unreadable 429 records nothing and
+                                                // hides nothing (fail-open). A network
+                                                // failure never reaches here.
+                                                long until = QuotaState2066.record(
+                                                        QuotaState2066.prefsStore(a.prefs),
+                                                        QuotaState2066.TRANSLATE,
+                                                        rateLimited.error, rateLimited.source,
+                                                        rateLimited.retryAfterOrNull,
+                                                        System.currentTimeMillis());
+                                                a.ui.post(
+                                                        () -> {
+                                                            translateBtn.setEnabled(true);
+                                                            if (until > 0) {
+                                                                translateBtn.setVisibility(View.GONE);
+                                                                a.toast("翻譯額度用完，24 小時後再試");
+                                                            } else {
+                                                                a.toast("翻譯失敗，請稍後再試");
+                                                            }
+                                                        });
                                             } catch (Throwable t) {
                                                 a.ui.post(
                                                         () -> {
@@ -1281,6 +1307,14 @@ final class MobileDetailScreen {
                     // the list never re-queries.
                     TextView trailerBtn = a.text("🎬  預告片 · YouTube", 13, 0xccffffff);
                     trailerBtn.setTag("detail-trailer");
+                    // mkoai 2.0.66: while the YouTube daily quota is out the
+                    // button stays hidden (it returns after the midnight
+                    // Pacific reset).
+                    if (QuotaState2066.isHidden(
+                            QuotaState2066.prefsStore(a.prefs),
+                            QuotaState2066.TRAILER, System.currentTimeMillis())) {
+                        trailerBtn.setVisibility(View.GONE);
+                    }
                     trailerBtn.setGravity(Gravity.CENTER);
                     trailerBtn.setPadding(a.dp(8), a.dp(10), a.dp(8), 0);
                     bindTouchFeedback(trailerBtn);
@@ -1294,10 +1328,29 @@ final class MobileDetailScreen {
                                             try {
                                                 trailers = YoutubeClient.search(queryTitle);
                                             } catch (WorkerApi.RateLimited rateLimited) {
+                                                // mkoai 2.0.66: YouTube daily quota — the
+                                                // record's return decides the hide (see
+                                                // the translate catch above): a real quota
+                                                // signal hides the button until the midnight
+                                                // Pacific reset; an unreadable 429 hides
+                                                // nothing. A network failure never reaches
+                                                // here (only a Worker 429 does).
+                                                long until = QuotaState2066.record(
+                                                        QuotaState2066.prefsStore(a.prefs),
+                                                        QuotaState2066.TRAILER,
+                                                        rateLimited.error, rateLimited.source,
+                                                        rateLimited.retryAfterOrNull,
+                                                        System.currentTimeMillis());
                                                 a.ui.post(
-                                                        () ->
+                                                        () -> {
+                                                            if (until > 0) {
                                                                 a.toast(
-                                                                        "YouTube 額度用完，午夜太平洋時間重置"));
+                                                                        "YouTube 額度用完，午夜太平洋時間重置");
+                                                                trailerBtn.setVisibility(View.GONE);
+                                                            } else {
+                                                                a.toast("預告片搜尋失敗，請稍後再試");
+                                                            }
+                                                        });
                                                 return;
                                             } catch (Throwable t) {
                                                 a.ui.post(
@@ -3060,6 +3113,14 @@ final class MobileDetailScreen {
         if (a == null || a.root == null) return;
         TextView btn = (TextView) a.root.findViewWithTag("detail-translate-btn");
         if (btn == null) return;
+        // mkoai 2.0.66: while the DeepL quota is out the button stays
+        // hidden (it returns after 24h and re-tests on the next tap).
+        if (QuotaState2066.isHidden(
+                QuotaState2066.prefsStore(a.prefs),
+                QuotaState2066.TRANSLATE, System.currentTimeMillis())) {
+            btn.setVisibility(View.GONE);
+            return;
+        }
         TextView translatedTv =
                 (TextView) a.root.findViewWithTag("detail-synopsis-translated");
         if (translatedTv != null && translatedTv.getVisibility() == View.VISIBLE) {
@@ -3157,21 +3218,41 @@ final class MobileDetailScreen {
                     try {
                         // OMDb: TMDB external imdb_id first, title fallback.
                         JSONObject omdb = null;
-                        try {
-                            String imdbId = null;
-                            if (tmdbId > 0) {
-                                try {
-                                    imdbId =
-                                            TmdbClient.externalImdbId(
-                                                    a.getFilesDir(), tmdbKind, tmdbId);
-                                } catch (Throwable ignored) {
+                        // mkoai 2.0.66: while the OMDb daily quota is out,
+                        // skip the fetch entirely — the ratings area stays
+                        // hidden until the UTC midnight reset, and no
+                        // request is made on every detail visit.
+                        boolean omdbHidden = QuotaState2066.isHidden(
+                                QuotaState2066.prefsStore(a.prefs),
+                                QuotaState2066.OMDB, System.currentTimeMillis());
+                        if (!omdbHidden) {
+                            try {
+                                String imdbId = null;
+                                if (tmdbId > 0) {
+                                    try {
+                                        imdbId =
+                                                TmdbClient.externalImdbId(
+                                                        a.getFilesDir(), tmdbKind, tmdbId);
+                                    } catch (Throwable ignored) {
+                                    }
                                 }
+                                omdb =
+                                        (imdbId != null && !imdbId.isEmpty())
+                                                ? OmdbClient.fetchByImdbIdOrThrow(imdbId)
+                                                : OmdbClient.fetchByTitleOrThrow(title);
+                            } catch (WorkerApi.RateLimited limited) {
+                                // OMDb daily quota — record it so the
+                                // ratings area stays hidden until the
+                                // reset. A network failure never reaches
+                                // here (only a Worker 429 does).
+                                QuotaState2066.record(
+                                        QuotaState2066.prefsStore(a.prefs),
+                                        QuotaState2066.OMDB,
+                                        limited.error, limited.source,
+                                        limited.retryAfterOrNull,
+                                        System.currentTimeMillis());
+                            } catch (Throwable ignored) {
                             }
-                            omdb =
-                                    (imdbId != null && !imdbId.isEmpty())
-                                            ? OmdbClient.fetchByImdbId(imdbId)
-                                            : OmdbClient.fetchByTitle(title);
-                        } catch (Throwable ignored) {
                         }
 
                         // Fanart: movies take the TMDB id; TV takes the TVDB id

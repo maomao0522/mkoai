@@ -1,5 +1,6 @@
 package app.mkoai.player;
 
+import java.io.IOException;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -26,10 +27,28 @@ public final class OmdbClient {
     public static JSONObject fetchByImdbId(String imdbId) {
         if (imdbId == null || imdbId.isEmpty()) return null;
         try {
-            JSONObject envelope = WorkerApi.getJson("/api/omdb?id=" + WorkerApi.encode(imdbId));
-            return envelope == null ? null : envelope.optJSONObject("data");
+            return fetchByImdbIdOrThrow(imdbId);
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    /**
+     * mkoai 2.0.66: throwing variant of {@link #fetchByImdbId} — the
+     * same fetch, but a Worker quota 429 (or any failure other than
+     * 404) is thrown instead of swallowed, so the detail page can
+     * record it and hide the ratings area until the daily reset. A 404
+     * (no such title) still returns null: "not found" is not a quota
+     * failure and must not hide anything.
+     */
+    public static JSONObject fetchByImdbIdOrThrow(String imdbId) throws IOException {
+        if (imdbId == null || imdbId.isEmpty()) return null;
+        try {
+            JSONObject envelope = WorkerApi.getJson("/api/omdb?id=" + WorkerApi.encode(imdbId));
+            return envelope == null ? null : envelope.optJSONObject("data");
+        } catch (WorkerApi.HttpError e) {
+            if (e.status == 404) return null;
+            throw e;
         }
     }
 
@@ -40,10 +59,24 @@ public final class OmdbClient {
     public static JSONObject fetchByTitle(String title) {
         if (title == null || title.isEmpty()) return null;
         try {
-            JSONObject envelope = WorkerApi.getJson("/api/omdb?title=" + WorkerApi.encode(title));
-            return envelope == null ? null : envelope.optJSONObject("data");
+            return fetchByTitleOrThrow(title);
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    /**
+     * mkoai 2.0.66: throwing variant of {@link #fetchByTitle} — see
+     * {@link #fetchByImdbIdOrThrow}.
+     */
+    public static JSONObject fetchByTitleOrThrow(String title) throws IOException {
+        if (title == null || title.isEmpty()) return null;
+        try {
+            JSONObject envelope = WorkerApi.getJson("/api/omdb?title=" + WorkerApi.encode(title));
+            return envelope == null ? null : envelope.optJSONObject("data");
+        } catch (WorkerApi.HttpError e) {
+            if (e.status == 404) return null;
+            throw e;
         }
     }
 

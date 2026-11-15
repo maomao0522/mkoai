@@ -136,8 +136,8 @@ def main():
     check("SCRIM_STOPS = 8" in hd and "BLOOM_STOPS = 6" in hd
           and "SCRIM_TINT" not in hd,
           "bloom math: 8-stop scrim, 6-stop bloom, no black tint")
-    check("bar.setBackgroundColor(HeroDiffusion2063.topBarTone(heroDiffusionShown))" in ms,
-          "top bar: still the page tone itself, colour only, layout untouched")
+    check("topBarTone" not in ms and "home-top-pill" in ms,
+          "top bar: the flat band is gone — a floating pill over the hero (2.0.66), topBarTone deleted")
     check("homeTopFade.setBaseColor(heroDiffusionShown)" in ms,
           "top fade: still follows the shown tone on the home tab")
     check("heroDiffusionShown" in ms and "heroDiffusionTarget" in ms,
@@ -206,13 +206,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.65"' in ev and "20066" in ev, "edition-versions.json = 2.0.65 / 20066")
+    check('"2.0.66"' in ev and "20067" in ev, "edition-versions.json = 2.0.66 / 20067")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.65"' in man and 'android:versionCode="20066"' in man,
-          "AndroidManifest.xml = 2.0.65 / 20066")
+    check('android:versionName="2.0.66"' in man and 'android:versionCode="20067"' in man,
+          "AndroidManifest.xml = 2.0.66 / 20067")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

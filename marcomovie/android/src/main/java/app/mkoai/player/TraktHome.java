@@ -17,9 +17,12 @@ import org.json.JSONObject;
  * fallback chain supplies one. {@code watchers} is never shown as a
  * rating (vote stays 0).
  *
- * <p>Rate-limit fallback: if trending returns 429, popular is tried
- * exactly once; if popular fails too the error is thrown, never retried.
- * All methods are static and blocking — call from a background thread.
+ * <p>mkoai 2.0.66: the popular fallback is gone. If trending returns
+ * 429 the error is recorded into QuotaState (when a store is passed)
+ * and rethrown — the same upstream on the same egress IP would 429
+ * popular too, so a second call only hammers a rate-limited upstream.
+ * The home row stays hidden for the retry_after window instead of
+ * retrying on every open.
  *
  * <p>2.0.62 home sections: {@link #fetchMoviesVideos} /
  * {@link #fetchShowsVideos} convert the items to {@link Cms.Video} via
@@ -33,12 +36,24 @@ final class TraktHome {
 
     /** Trakt trending movies as home items. Throws on failure. */
     public static List<TmdbClient.Item> fetchMoviesItems() throws IOException {
-        return fetchItems("movies", true);
+        return fetchItems("movies", true, null);
+    }
+
+    /** mkoai 2.0.66: same, recording a quota 429 into {@code quota} (phone home rows). */
+    public static List<TmdbClient.Item> fetchMoviesItems(QuotaState2066.Store quota)
+            throws IOException {
+        return fetchItems("movies", true, quota);
     }
 
     /** Trakt trending shows as home items. Throws on failure. */
     public static List<TmdbClient.Item> fetchShowsItems() throws IOException {
-        return fetchItems("shows", false);
+        return fetchItems("shows", false, null);
+    }
+
+    /** mkoai 2.0.66: same, recording a quota 429 into {@code quota} (phone home rows). */
+    public static List<TmdbClient.Item> fetchShowsItems(QuotaState2066.Store quota)
+            throws IOException {
+        return fetchItems("shows", false, quota);
     }
 
     /** mkoai 2.0.62: Trakt trending movies as home videos. Throws on failure. */
@@ -122,7 +137,12 @@ final class TraktHome {
 
     private static List<TmdbClient.Item> fetchItems(String type, boolean isMovie)
             throws IOException {
-        List<Entry> entries = fetchEntries(type, isMovie);
+        return fetchItems(type, isMovie, null);
+    }
+
+    private static List<TmdbClient.Item> fetchItems(
+            String type, boolean isMovie, QuotaState2066.Store quota) throws IOException {
+        List<Entry> entries = fetchEntries(type, isMovie, quota);
         List<TmdbClient.Item> out = new ArrayList<>(entries.size());
         for (Entry e : entries) out.add(e.item);
         return out;
@@ -130,17 +150,27 @@ final class TraktHome {
 
     private static List<Entry> fetchEntries(String type, boolean isMovie)
             throws IOException {
+        return fetchEntries(type, isMovie, null);
+    }
+
+    private static List<Entry> fetchEntries(String type, boolean isMovie,
+            QuotaState2066.Store quota) throws IOException {
         JSONArray data;
         try {
             JSONObject res =
                     WorkerApi.getJson("/api/trakt?type=" + type + "&list=trending");
             data = res.optJSONArray("data");
         } catch (WorkerApi.RateLimited limited) {
-            // trending 被上游限流：改打一次 popular 當備援。popular 再失敗
-            // 就直接拋出，不要連打（Trakt 會對 Worker 出口 IP 限流）。
-            JSONObject res =
-                    WorkerApi.getJson("/api/trakt?type=" + type + "&list=popular");
-            data = res.optJSONArray("data");
+            // mkoai 2.0.66: trending 被上游限流就直接收起這列，不再改打
+            // popular 當備援——同一個上游、同一個 Worker 出口 IP，
+            // popular 一樣會 429，再打一次只是多一次被限流的請求。
+            // 限流資訊記進 QuotaState，首頁在 retry_after 內不再重試。
+            if (quota != null) {
+                QuotaState2066.record(quota, QuotaState2066.TRAKT,
+                        limited.error, limited.source, limited.retryAfterOrNull,
+                        System.currentTimeMillis());
+            }
+            throw limited;
         }
         List<String> titles = new ArrayList<>();
         List<JSONObject> raws = new ArrayList<>(); // entries that passed the title check
@@ -149,7 +179,8 @@ final class TraktHome {
             for (int i = 0; i < data.length() && titles.size() < MAX_ITEMS; i++) {
                 JSONObject entry = data.optJSONObject(i);
                 if (entry == null) continue;
-                // trending 有 movie/show 包裝層，popular 是裸物件。
+                // trending 把每項包在 movie/show 物件裡；obj 為空時退回
+                // 裸物件（防禦——2.0.66 起只打 trending，不再打 popular）。
                 JSONObject obj = isMovie ? entry.optJSONObject("movie")
                         : entry.optJSONObject("show");
                 if (obj == null) obj = entry;

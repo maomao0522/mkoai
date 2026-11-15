@@ -12,8 +12,9 @@ package app.mkoai.player;
  *      far colour (the tone diffused once more) at the bottom; the
  *      far colour is always backgroundTone(tone), the midpoint always
  *      lerp(tone, far, 0.5)
- *  topBarTone / fadeColors — unchanged: the bar takes the tone itself,
- *      the fade reproduces the 2.0.38 veil for the fixed base colour
+ *  fadeColors — unchanged: the fade reproduces the 2.0.38 veil for
+ *      the fixed base colour (topBarTone was deleted in 2.0.66 — the
+ *      flat bar became a floating pill — so it has no JVM pin here)
  * Covers the 2.0.64 hero anime signals (VideoKind2061.isAnimeHero /
  * filterNonAnimeHero — hero-only, the recommendation page and the type
  * badge never see them):
@@ -102,12 +103,13 @@ public class Home2064Checks {
         eq(tealBloom[3], 0xff2b4f4b,
                 "bloomColors: the teal midpoint stays in the same hue family");
 
-        // ---- topBarTone / fadeColors (unchanged in 2.0.64) ----
-        eq(HeroDiffusion2063.topBarTone(0xff30625c), 0xff30625c,
-                "topBarTone: the bar takes the page tone itself, no extra darkening");
-        eq(HeroDiffusion2063.topBarTone(HeroDiffusion2063.FALLBACK_BG),
-                HeroDiffusion2063.FALLBACK_BG,
-                "topBarTone: the slate fallback passes through unchanged");
+        // ---- topBarTone (deleted in 2.0.66) / fadeColors (unchanged) ----
+        // mkoai 2.0.66: topBarTone is gone — the flat top bar became a
+        // floating pill over the hero, and the pill is re-tinted by
+        // MobileShell.retintTopOverlay, not by a HeroDiffusion2063
+        // helper. There is no JVM call left to pin here; the deletion
+        // is pinned statically by run_mkoai_2064_checks.py (and by
+        // run_mkoai_2066_checks.py). fadeColors is unchanged.
         int[] fade = HeroDiffusion2063.fadeColors(HeroDiffusion2063.TOP_FADE_FIXED_RGB);
         check(fade[0] == 0xd80d1c16 && fade[1] == 0x780d1c16 && fade[2] == 0x000d1c16,
                 "fadeColors: the fixed base reproduces the original 2.0.38 veil exactly");

@@ -239,14 +239,13 @@ def main():
           "rest state: both bloom sites (create + re-tint) use the anchored bloom")
     check("heroDiffusionShown, heroDiffusionHoldFraction" in ms,
           "rest state: the bloom is anchored to heroDiffusionHoldFraction")
-    check("hero-diffusion-topfade" in ms and ms.count("topFadeColors") == 2,
-          "rest state: the hero top fade exists and is re-tinted with the scrim")
-    check("heroTopFades.clear()" in ms and "heroTopFades.add(topFade)" in ms,
-          "rest state: the top-fade list is cleared and filled with the scrims")
-    check("HOME_TOP_BAR_HEIGHT_DP = 60f" in hd
+    check("hero-diffusion-topfade" not in ms and "topFadeColors" not in ms
+          and "heroTopFades" not in ms,
+          "rest state: the 2.0.65 hero top fade is gone in 2.0.66 (the bar is a floating pill now)")
+    check("HOME_TOP_BAR_HEIGHT_DP" not in ms and "HOME_TOP_BAR_HEIGHT_DP" not in hd
           and "HOLD_FRACTION_MIN = 0.40f" in hd
           and "HOLD_FRACTION_MAX = 0.90f" in hd,
-          "rest state: bar 60dp, hold clamped to 0.40..0.90")
+          "rest state: the 60dp bar is deleted; the hold is still clamped to 0.40..0.90")
     check("bloomColorsAnchored" in hd and "topFadeColors" in hd
           and "heroBottomFraction" in hd and "heroHeightDp" in hd,
           "rest state: the new helpers live in HeroDiffusion2063")
@@ -295,13 +294,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.65"' in ev and "20066" in ev, "edition-versions.json = 2.0.65 / 20066")
+    check('"2.0.66"' in ev and "20067" in ev, "edition-versions.json = 2.0.66 / 20067")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.65"' in man and 'android:versionCode="20066"' in man,
-          "AndroidManifest.xml = 2.0.65 / 20066")
+    check('android:versionName="2.0.66"' in man and 'android:versionCode="20067"' in man,
+          "AndroidManifest.xml = 2.0.66 / 20067")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

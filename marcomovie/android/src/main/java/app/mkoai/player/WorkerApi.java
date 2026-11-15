@@ -28,13 +28,59 @@ final class WorkerApi {
 
     private static final int TIMEOUT_MS = 10000;
 
-    /** Upstream rate limit (HTTP 429). {@link #retryAfter} is seconds. */
+    /**
+     * Upstream rate limit (HTTP 429). {@link #retryAfter} is seconds
+     * (60 when the body had no usable retry_after, the old default).
+     * mkoai 2.0.66: also carries the Worker's {@code error} /
+     * {@code source} fields and the raw {@code retry_after}
+     * ({@link #retryAfterOrNull}, null when the body had none) — the
+     * quota-hide classifier needs them: a null retry_after is
+     * meaningful, because the daily quotas (YouTube, OMDb) send
+     * retry_after:null and the app must compute the reset itself.
+     */
     public static final class RateLimited extends IOException {
         public final int retryAfter;
+        /** The Worker's error field (e.g. "upstream_rate_limited",
+         * "deepl_quota_exhausted"), or null when the body had none. */
+        public final String error;
+        /** The Worker's source field (e.g. "youtube"), or null. */
+        public final String source;
+        /** retry_after from the body, null when absent / null /
+         * unreadable. */
+        public final Integer retryAfterOrNull;
 
         public RateLimited(int r) {
+            this(r, null, null, null);
+        }
+
+        public RateLimited(int r, String error, String source, Integer retryAfterOrNull) {
             super("rate limited, retry after " + r + "s");
             retryAfter = r;
+            this.error = error;
+            this.source = source;
+            this.retryAfterOrNull = retryAfterOrNull;
+        }
+    }
+
+    /**
+     * mkoai 2.0.66: a non-200, non-429 Worker failure, carrying the
+     * status and the body's {@code error} / {@code retry_after} so
+     * quota-hide can classify it (the notify route reports its
+     * upstream 429 inside a 502 body: {error:"notify_failed",
+     * status:429, retry_after}). Extends IOException, and the message
+     * keeps the exact old format ("HTTP 502 notify_failed"), so every
+     * existing catch still works.
+     */
+    public static final class HttpError extends IOException {
+        public final int status;
+        public final String error;
+        public final Integer retryAfterOrNull;
+
+        public HttpError(int status, String error, Integer retryAfterOrNull) {
+            super("HTTP " + status + (error == null || error.isEmpty() ? "" : " " + error));
+            this.status = status;
+            this.error = error;
+            this.retryAfterOrNull = retryAfterOrNull;
         }
     }
 
@@ -51,9 +97,10 @@ final class WorkerApi {
     /**
      * GET BASE + path, expecting a JSON object. 200 returns the parsed
      * object (a non-JSON body is an IOException); 429 throws RateLimited
-     * with retry_after from the body (default 60s); 503 / 404 / anything
-     * else throws IOException whose message carries the status and the
-     * body's {@code error} field.
+     * with retry_after from the body (default 60s) plus the body's
+     * error / source fields; any other non-200 throws HttpError
+     * carrying the status and the body's error / retry_after, with the
+     * same message format as before ("HTTP 502 notify_failed").
      */
     public static JSONObject getJson(String path) throws IOException {
         String body = request(path, "GET", null);
@@ -109,33 +156,53 @@ final class WorkerApi {
                     : c.getErrorStream();
             String body = readAll(in);
             if (status == 200) return body;
-            if (status == 429) throw new RateLimited(parseRetryAfter(body));
-            throw new IOException("HTTP " + status + errorSuffix(body));
+            if (status == 429) {
+                Integer ra = parseRetryAfterOrNull(body);
+                throw new RateLimited(
+                        ra == null ? 60 : ra.intValue(),
+                        parseErrorField(body), parseSourceField(body), ra);
+            }
+            throw new HttpError(status, parseErrorField(body), parseRetryAfterOrNull(body));
         } finally {
             if (c != null) c.disconnect();
         }
     }
 
-    /** retry_after from a 429 body (string or number seconds); 60 when unreadable. */
-    private static int parseRetryAfter(String body) {
+    /** retry_after from an error body (string or number seconds); null when absent / null / unreadable. */
+    private static Integer parseRetryAfterOrNull(String body) {
         try {
             JSONObject o = new JSONObject(body);
             Object v = o.opt("retry_after");
-            if (v instanceof Number) return ((Number) v).intValue();
-            if (v instanceof String) return Integer.parseInt(((String) v).trim());
+            if (v instanceof Number) return Integer.valueOf(((Number) v).intValue());
+            if (v instanceof String) return Integer.valueOf(Integer.parseInt(((String) v).trim()));
         } catch (Exception ignored) {
         }
-        return 60;
+        return null;
+    }
+
+    /** The body's error field, or "" when there is none. */
+    private static String parseErrorField(String body) {
+        try {
+            return new JSONObject(body).optString("error", "").trim();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    /** The body's source field, or null when there is none. */
+    private static String parseSourceField(String body) {
+        try {
+            String s = new JSONObject(body).optString("source", "").trim();
+            return s.isEmpty() ? null : s;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     /** " <error>" from an error body, or "" when there is none. */
     private static String errorSuffix(String body) {
-        try {
-            String err = new JSONObject(body).optString("error", "").trim();
-            return err.isEmpty() ? "" : " " + err;
-        } catch (Exception ignored) {
-            return "";
-        }
+        String err = parseErrorField(body);
+        return err.isEmpty() ? "" : " " + err;
     }
 
     private static String readAll(InputStream in) throws IOException {

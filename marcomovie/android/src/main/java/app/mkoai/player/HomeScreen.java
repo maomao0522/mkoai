@@ -2231,9 +2231,11 @@ final class HomeScreen {
         art.setScaleType(ImageView.ScaleType.CENTER_CROP);
         artWrap.addView(art, new FrameLayout.LayoutParams(-1, -1));
         // 2.0.40: year bottom-left on the poster.
-        MobileShell.addPosterOverlay(a, artWrap, video.remarks, video.year);
-        // 2.0.61 (j): 「電影」 / 「劇」 chip at the poster's top-left corner.
-        VideoKind2061.addTypeBadge(a, artWrap, video);
+        // mkoai 2.0.66: the 「電影」/「劇」 label joins the bottom overlay
+        // row as its left element (bottom-left, white bold + shadow, no
+        // pill — the top-left dark chip is gone); the year follows it.
+        MobileShell.addPosterOverlay(
+                a, artWrap, video.remarks, video.year, VideoKind2061.badgeLabel(video));
         card.addView(
                 artWrap,
                 new LinearLayout.LayoutParams(a.dp(posterWidth), a.dp(posterWidth * 1.5f)));
