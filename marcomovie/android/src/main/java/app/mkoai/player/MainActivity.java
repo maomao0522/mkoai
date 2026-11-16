@@ -104,6 +104,16 @@ public final class MainActivity extends Activity {
     FrameLayout root;
     LinearLayout body;
     ScrollView scroll;
+    /**
+     * mkoai 2.0.72: the current home hero tone, published by
+     * MobileShell.applyPageTone for tone-following renderPage pages
+     * (the watch-history page). DARK until the first tone lands, so a
+     * page built before the hero loads looks exactly like today.
+     * TV never runs the shell, so it stays DARK there.
+     */
+    int pageTone = DARK;
+    /** Tag on a renderPage scroll whose page follows {@link #pageTone} (history). */
+    static final String TONE_PAGE_TAG = "tone-page";
     Screen current;
     Cms.Config config;
     android.content.SharedPreferences prefs;
@@ -1979,6 +1989,75 @@ public final class MainActivity extends Activity {
 
     void historyPage() {
         CatalogScreen.historyPage(this);
+        // mkoai 2.0.72: the history page follows the home hero tone
+        // (user: the whole page should be the same colour as home).
+        // renderPage re-creates the root dark and paints an opaque
+        // frost Atmosphere over it, so the tone goes on the scroll
+        // too — the scroll is added after the Atmosphere and fills
+        // the viewport, so its opaque background is the page
+        // background the user sees (same pattern as
+        // MobileShell.showTmdbListPage's openListTone). TV and
+        // wallpaper keep today's dark page: TV has no shell tone,
+        // and with a wallpaper the Atmosphere IS the page.
+        applyHistoryTone();
+    }
+
+    /** Tag the current renderPage scroll as tone-following and paint it once. */
+    void applyHistoryTone() {
+        if (isTvDevice() || prefs.getBoolean(Prefs.WALLPAPER_ENABLED, false)) return;
+        if (scroll == null || body == null) return;
+        scroll.setTag(TONE_PAGE_TAG);
+        retintRenderPage();
+    }
+
+    /**
+     * mkoai 2.0.72: re-tint a tone-following renderPage page with the
+     * current hero tone. No-op unless the current scroll carries
+     * {@link #TONE_PAGE_TAG}, so every other renderPage page (and
+     * the shell, which has no renderPage scroll) is untouched.
+     * Called from MobileShell.applyDiffusionFrame on every diffusion
+     * frame, so a hero rotation while the history page is open
+     * re-tints it live; the background sets are the animation
+     * itself, the text walk only writes when a colour actually
+     * changes, so a steady frame is a tag check plus two guarded
+     * colour compares.
+     */
+    void retintRenderPage() {
+        if (scroll == null || body == null) return;
+        if (!TONE_PAGE_TAG.equals(scroll.getTag())) return;
+        if (root != null) root.setBackgroundColor(pageTone);
+        scroll.setBackgroundColor(pageTone);
+        retintRenderPageWalk(body);
+    }
+
+    /**
+     * mkoai 2.0.72: the tone-following walk for a renderPage body.
+     * Text directly on the page background flips by its current
+     * colour (see HomeTone2066.retintPageColor). A subtree rooted
+     * at a view with a non-transparent background is skipped whole
+     * - that is the dark glass that must stay dark: the poster art
+     * (and its fallback title, episode badge, play button and
+     * progress track), the "clear history" pill, and a focused
+     * card's highlight. A view whose background is fully
+     * transparent is NOT skipped: the info "i" button's oval is
+     * stroke-only and the "..." button has no background at all,
+     * so both sit on the page background itself and their white
+     * glyphs would vanish on a light page if left alone.
+     */
+    private void retintRenderPageWalk(android.view.ViewGroup parent) {
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            android.view.View child = parent.getChildAt(i);
+            android.graphics.drawable.Drawable bg = child.getBackground();
+            if (bg != null
+                    && bg.getOpacity() != android.graphics.PixelFormat.TRANSPARENT) continue;
+            if (child instanceof android.widget.TextView) {
+                android.widget.TextView tv = (android.widget.TextView) child;
+                int want = HomeTone2066.retintPageColor(tv.getCurrentTextColor(), pageTone);
+                if (want != tv.getCurrentTextColor()) tv.setTextColor(want);
+            } else if (child instanceof android.view.ViewGroup) {
+                retintRenderPageWalk((android.view.ViewGroup) child);
+            }
+        }
     }
 
     void releasePlayer() {

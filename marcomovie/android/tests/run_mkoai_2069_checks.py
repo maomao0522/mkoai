@@ -5,10 +5,11 @@
 # (1) top bar moved back up in 2.0.71 (statusBarHeight + 20dp -> + 8dp,
 #     badge follows + 78dp -> + 58dp) AND the top gets the hero diffusion
 #     feel: the root-level TopEdgeFadeView now uses the topFadeColors
-#     gradient and is TALL on the home tab (statusBarHeight + 150dp in
-#     2.0.71, was 250dp), short on other tabs (statusBarHeight + 24dp) — so the hero art emerges out of
-#     the page tone at the top instead of starting at a hard cut, and
-#     no longer reads as a poster pasted on the page. The in-card top
+#     gradient and is GONE on the home tab in 2.0.72 (was statusBarHeight
+#     + 150dp in 2.0.71, 250dp before that), short on other tabs
+#     (statusBarHeight + 24dp) — so the hero poster runs clean to the
+#     top edge instead of starting at a hard cut, and no longer reads
+#     as a poster pasted on the page. The in-card top
 #     fade stays gone; the bottom scrim, bloom, grid, subtitles
 #     removal and Maoki source selection are untouched.
 # Plus the TV-untouched, anime-filter-untouched, DeepL-untouched,
@@ -185,8 +186,9 @@ def main():
           "(1b) the veil gradient has the 8 evenly spaced topFadeColors stops")
     check("topFadeHeightPx()" in ms and "updateTopFadeHeight()" in ms,
           "(1b) the veil height helpers exist (topFadeHeightPx / updateTopFadeHeight)")
-    check("statusBarHeight() + a.dp(activeTab == 0 ? 150 : 24)" in ms,
-          "(1b) veil height is statusBarHeight + 150dp on home, + 24dp on other tabs")
+    check("if (activeTab == 0) return 0;" in ms
+          and "return statusBarHeight() + a.dp(24);" in ms,
+          "(1b) veil height is 0 on home (2.0.72, was statusBarHeight + 150dp), + 24dp on other tabs")
     check(ms.count("updateTopFadeHeight()") >= 2,
           "(1b) updateTopFadeHeight is defined and called from switchTab (height follows the tab)")
     upd = ms[ms.index("private void updateTopFadeHeight()"):]

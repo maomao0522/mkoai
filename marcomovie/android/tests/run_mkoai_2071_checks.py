@@ -2,7 +2,7 @@
 # mkoai 2.0.71 checks — real-code JVM checks + static regression checks.
 # Runs Home2071Checks (top-veil + bottom-scrim + title-wash geometry on
 # the measured POCO F5 numbers), plus static greps for the 2.0.71 items:
-# (fog) top veil 250dp -> 150dp (same topFadeColors shape); bottom scrim
+# (fog) top veil 250dp -> 150dp -> GONE on home in 2.0.72 (same topFadeColors shape); bottom scrim
 #   ramp moves back (five transparent stops, 25% at 5/7, 75% at 6/7,
 #   opaque bottom — no seam with the bloom).
 # (dock) search joins the dock (DOCK_TAB_INDICES {0,1,2,3,5,4}, no-live
@@ -246,11 +246,13 @@ def main():
     hs = read("HomeScreen.java")
     hd = read("HeroDiffusion2063.java")
 
-    # ---- Static: fog (1) — the top veil is pulled back 250dp -> 150dp ----
-    check("statusBarHeight() + a.dp(activeTab == 0 ? 150 : 24)" in ms,
-          "(fog-1) home veil is statusBarHeight + 150dp (was 250dp), other tabs stay + 24dp")
-    check("statusBarHeight() + a.dp(activeTab == 0 ? 250 : 24)" not in ms,
-          "(fog-1) the old 250dp home veil is gone")
+    # ---- Static: fog (1) — the top veil is gone on home in 2.0.72 (was 150dp) ----
+    check("if (activeTab == 0) return 0;" in ms
+          and "return statusBarHeight() + a.dp(24);" in ms,
+          "(fog-1) home veil is 0 (gone, was statusBarHeight + 150dp), other tabs stay + 24dp")
+    check("statusBarHeight() + a.dp(activeTab == 0 ? 250 : 24)" not in ms
+          and "activeTab == 0 ? 150 : 24" not in ms,
+          "(fog-1) the old 250dp / 150dp home veils are gone")
     top_fade = ms[ms.index("private static final class TopEdgeFadeView"):]
     top_fade = top_fade[:top_fade.index("private static final class BottomEdgeFadeView")]
     check("topFadeColors(baseRgb)" in top_fade,

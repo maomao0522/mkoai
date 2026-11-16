@@ -50,6 +50,11 @@ package app.mkoai.player;
  * the bar bottom on clean art); bottom scrim: five transparent
  * stops, 25% at 5/7, 75% at 6/7, opaque at the bottom (fade from
  * ~71% of the hero, covering the bottom ~29%).
+ * mkoai 2.0.72 (this file updated in place): the home veil is gone
+ * entirely (height 0 - the poster runs clean to the top edge, no
+ * fog); the other-tab veil stays 41 + 24 = 65dp. topFadeColors is
+ * unchanged (it still builds the other tabs' veil). The bar
+ * geometry above is unchanged.
  * The wiring (exact margin strings, the veil gradient + heights, the
  * switchTab resize, the in-card top fade staying gone) is
  * source-checked by the runner.
@@ -118,36 +123,17 @@ public class Home2069Checks {
                         && top[7] == 0x00000000,
                 "topFadeColors: transparent from the fourth stop to the bottom");
 
-        // ---- the tall home veil: where the stops land on a POCO F5 ----
-        // (2.0.71: pulled back 250dp -> 150dp — the numbers below are
-        // the new ones; the shape is unchanged.)
-        double veilH = sbFn + 150.0;
-        near(veilH, 191.0, 0.5, "home veil height is ~191dp (statusBar + 150dp, was 291dp)");
-        double opaqueEnd = veilH / 7.0;
-        double halfAt = 2.0 * veilH / 7.0;
-        double clearFrom = 3.0 * veilH / 7.0;
-        near(opaqueEnd, 27.3, 0.5, "veil opaque through ~27.3dp (was ~41.6dp)");
-        double alphaSbBottom = 1.0 - (sbSys / veilH - 1.0 / 7.0) / (1.0 / 7.0) * 0.5;
-        near(alphaSbBottom, 0.82, 0.03,
-                "veil alpha at the status-bar bottom is ~0.82 (opaque zone covers only its top ~27dp now, still mostly tone)");
-        near(halfAt, 54.6, 0.5, "veil half tone at ~54.6dp (was ~83.1dp)");
-        check(newBarTop < halfAt && halfAt < newBarBottom,
-                "veil half tone lands inside the bar span (49-89dp): the bar's top sits on tone, its bottom on art");
-        near(clearFrom, 81.9, 0.5, "veil fully transparent from ~81.9dp (was ~124.7dp)");
-        check(clearFrom > newBarTop && clearFrom < newBarBottom,
-                "veil clears inside the bar span (81.9dp): the bar's lower half is on raw art, by design");
-        check(clearFrom < 300.0,
-                "veil clears well above the hero title zone (~300dp+): the art is clean in the middle");
-        // Veil alpha over the bar: ~26% down the veil at the bar top
-        // (between the opaque stop at 1/7 and the half stop at 2/7),
-        // ~47% down at the bar bottom (past the transparent stop).
-        double alphaTop = 1.0 - (newBarTop / veilH - 1.0 / 7.0) / (1.0 / 7.0) * 0.5;
-        double alphaBottom = 0.5 - (newBarBottom / veilH - 2.0 / 7.0) / (1.0 / 7.0) * 0.5;
-        if (alphaBottom < 0) alphaBottom = 0;
-        near(alphaTop, 0.60, 0.03, "veil alpha at the bar top is ~0.60 (was ~0.77)");
-        near(alphaBottom, 0.0, 0.01, "veil alpha at the bar bottom is 0 (fully clean art, was ~0.19)");
-        check(alphaTop > alphaBottom && alphaTop < 0.7 && alphaBottom == 0.0,
-                "veil fades across the bar: ~60% tone at its top, clean art at its bottom");
+        // ---- the home veil is gone (2.0.72): no fog on the poster top ----
+        // topFadeHeightPx() returns 0 on the home tab, so the hero
+        // poster runs clean to the very top edge. The stop-position
+        // arithmetic the old 191dp veil pinned is meaningless for a
+        // 0-height view and is deleted with it; topFadeColors itself
+        // is unchanged (pinned above) and still builds the other
+        // tabs' veil.
+        double veilH = 0.0;
+        near(veilH, 0.0, 0.5, "home veil height is 0dp (no top fog on the poster, was 191dp)");
+        check(veilH < sbSys,
+                "no veil over the status bar on home: the poster is flush with the top edge");
 
         // ---- the short veil on other tabs is unchanged ----
         double otherVeilH = sbFn + 24.0;
@@ -162,8 +148,8 @@ public class Home2069Checks {
         check(titleTopWorst > 300.0, "hero title top is never above ~300dp (bottom-anchored content)");
         check(newBarBottom < titleTopWorst - 100.0,
                 "lowered bar bottom (109dp) clears the title top by >100dp");
-        check(clearFrom < titleTopWorst,
-                "veil clears before the title zone: the title sits on clean art");
+        check(veilH == 0.0,
+                "no veil at all on home: the title sits on clean art (only the bottom scrim washes it)");
 
         // ---- the bottom dissolve (2.0.71: pulled back — five transparent
         // stops, 25% at 5/7, 75% at 6/7, opaque at the bottom) ----

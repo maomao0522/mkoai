@@ -18,10 +18,11 @@ package app.mkoai.player;
  *      0.40 hold, which is the seam the rest state showed.
  *  bloomColorsAnchored — 8 stops: the tone holds at full strength
  *      down to the hold fraction (the hero's bottom edge at rest),
- *      then fades outward into the far colour (backgroundTone of the
- *      tone). The far colour is the same hue, deeper and greyer —
- *      never grey and never black. A hold of 0.40 is the same shape
- *      as the old bloomColors.
+ *      then fades outward into the far colour (pageTone of the
+ *      tone since 2.0.72; was backgroundTone, which faded the page
+ *      bottom grey). The far colour is the same hue, a slightly
+ *      deeper pass of itself — never grey and never black. A hold
+ *      of 0.40 is the same shape as the old bloomColors.
  *  topFadeColors — 8 stops: the page tone over the top of the hero
  *      artwork (opaque through the first ~14%, half at ~28%,
  *      transparent from ~43% down), the mirror of the bottom scrim,
@@ -90,7 +91,7 @@ public class Home2065Checks {
 
         // ---- bloomColorsAnchored: hold 0.40 (the old shape) ----
         int tone = 0xff484d53;
-        int far = HeroDiffusion2063.backgroundTone(tone);
+        int far = HeroDiffusion2063.pageTone(tone);
         int[] anchored = HeroDiffusion2063.bloomColorsAnchored(tone, 0.40f);
         eq(anchored.length, HeroDiffusion2063.ANCHORED_BLOOM_STOPS,
                 "bloomColorsAnchored: eight stops");
@@ -98,13 +99,13 @@ public class Home2065Checks {
                 "bloomColorsAnchored: the tone holds for the stops above the hold");
         eq(anchored[7], far,
                 "bloomColorsAnchored: the last stop is the far colour");
-        eq(anchored[7], HeroDiffusion2063.backgroundTone(tone),
-                "bloomColorsAnchored: the far colour is backgroundTone(tone) by definition");
+        eq(anchored[7], HeroDiffusion2063.pageTone(tone),
+                "bloomColorsAnchored (2.0.72): the far colour is pageTone(tone) by definition");
         eq(anchored[3],
                 HeroDiffusion2063.lerpColor(tone, far, (3f / 7f - 0.40f) / (1f - 0.40f)),
                 "bloomColorsAnchored: the first faded stop is the lerp by definition");
-        check(anchored[3] != tone && anchored[3] != far,
-                "bloomColorsAnchored: the first faded stop is between tone and far, not a jump");
+        check(anchored[3] != far,
+                "bloomColorsAnchored: the first faded stop has not jumped to the far colour (2.0.72: with the nearer pageTone far it can equal the tone at this tiny step - still no jump; the exact lerp is pinned by the check above)");
         int[] black = HeroDiffusion2063.bloomColorsAnchored(0xff000000, 0.67f);
         check(black[0] == 0xff000000 && black[4] == 0xff000000 && black[7] == 0xff000000,
                 "bloomColorsAnchored: a black tone blooms to black everywhere");
@@ -123,14 +124,14 @@ public class Home2065Checks {
 
         // ---- bloomColorsAnchored: hold clamps ----
         int[] lowHold = HeroDiffusion2063.bloomColorsAnchored(tone, 0.10f);
-        check(lowHold[2] == tone && lowHold[3] != tone,
-                "bloomColorsAnchored: a hold below 0.40 clamps to 0.40");
+        check(lowHold[2] == tone && lowHold[4] != tone,
+                "bloomColorsAnchored: a hold below 0.40 clamps to 0.40 (the fade has started by the fourth stop; the third still rounds to the tone with the nearer 2.0.72 far)");
         int[] highHold = HeroDiffusion2063.bloomColorsAnchored(tone, 1.50f);
         check(highHold[6] == tone && highHold[7] == far,
                 "bloomColorsAnchored: a hold above 0.90 clamps to 0.90");
         int[] teal = HeroDiffusion2063.bloomColorsAnchored(0xff30625c, 0.67f);
-        eq(teal[7], 0xff253c39,
-                "bloomColorsAnchored: a teal tone fades into a deeper teal, never grey or black");
+        eq(teal[7], 0xff315753,
+                "bloomColorsAnchored (2.0.72): a teal tone fades into a deeper teal, never grey or black (was 0xff253c39 with the backgroundTone far)");
         check(((teal[6] >> 8) & 0xff) > ((teal[6] >> 16) & 0xff)
                         && ((teal[6]) & 0xff) > ((teal[6] >> 16) & 0xff),
                 "bloomColorsAnchored: the teal fade stays in the same hue family (green/blue above red)");
@@ -164,8 +165,8 @@ public class Home2065Checks {
                 "bloomColors unchanged: six stops");
         check(bloom[0] == tone && bloom[1] == tone && bloom[2] == tone,
                 "bloomColors unchanged: the tone holds for the top three stops");
-        eq(bloom[5], far,
-                "bloomColors unchanged: the far colour holds to the bottom");
+        eq(bloom[5], HeroDiffusion2063.backgroundTone(tone),
+                "bloomColors unchanged: the far colour holds to the bottom (legacy shape still ends on backgroundTone)");
 
         // ---- MaterialSwitch2065 constants ----
         near(MaterialSwitch2065.TRACK_WIDTH_DP, 52f, 0.01f,

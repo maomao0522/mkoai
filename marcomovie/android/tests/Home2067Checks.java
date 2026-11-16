@@ -204,7 +204,7 @@ public class Home2067Checks {
         near(hold, 0.6753f, 0.002f,
                 "bloom anchor: the hold is computed from heroHeightDp, so it follows the taller hero");
         int tone = 0xff484d53;
-        int far = HeroDiffusion2063.backgroundTone(tone);
+        int far = HeroDiffusion2063.pageTone(tone);
         int[] anchored = HeroDiffusion2063.bloomColorsAnchored(tone, hold);
         check(anchored[0] == tone && anchored[1] == tone && anchored[2] == tone
                         && anchored[3] == tone && anchored[4] == tone,

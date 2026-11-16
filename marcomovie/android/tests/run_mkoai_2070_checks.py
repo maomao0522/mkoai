@@ -308,8 +308,9 @@ def main():
           "2.0.71 moved: top bar is back at statusBarHeight + 8dp (was + 20dp in 2.0.69)")
     check("badgeLp.topMargin = statusBarHeight() + a.dp(58);" in ms,
           "2.0.71 moved: badge is back at statusBarHeight + 58dp (was + 78dp in 2.0.69)")
-    check("statusBarHeight() + a.dp(activeTab == 0 ? 150 : 24)" in ms,
-          "2.0.71 moved: home veil pulled back to 150dp (was 250dp) / short other-tab veil (24dp)")
+    check("if (activeTab == 0) return 0;" in ms
+          and "return statusBarHeight() + a.dp(24);" in ms,
+          "2.0.72 moved: home veil gone (was 150dp in 2.0.71) / short other-tab veil (24dp)")
     check("topFadeColors(baseRgb)" in top_fade,
           "2.0.69 holds: the root veil still uses topFadeColors")
     check("hero-diffusion-topfade" not in ms and "heroTopFades" not in ms,

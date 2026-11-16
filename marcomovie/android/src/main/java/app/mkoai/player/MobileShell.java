@@ -1137,11 +1137,10 @@ final class MobileShell {
             TopEdgeFadeView topFade = new TopEdgeFadeView(a);
             // mkoai 2.0.64: the fade is retinted with the hero tone while
             // the home tab is active (see applyDiffusionFrame).
-            // mkoai 2.0.69: on the home tab the veil is TALL (see
-            // updateTopFadeHeight) and uses the topFadeColors gradient,
-            // so the hero art emerges out of the page tone at the top
-            // instead of starting at a hard screen-edge cut; on other
-            // tabs it stays the short status-bar veil.
+            // mkoai 2.0.72: on the home tab the veil is GONE (height 0,
+            // see topFadeHeightPx) - the poster runs clean to the top
+            // edge. On other tabs it stays the short status-bar veil
+            // (statusBarHeight + 24dp) with the topFadeColors gradient.
             homeTopFade = topFade;
             topFade.setClickable(false);
             topFade.setFocusable(false);
@@ -1735,16 +1734,24 @@ final class MobileShell {
      * colour (a no-op when unchanged, and correct after the root is
      * re-created by render() / renderPage()). The welcome page (no
      * source/site yet) keeps the near-black root; the detail page sets
-     * the root to its own ambient tone itself, and history re-creates
-     * the root dark in renderPage — neither is touched by this.
+     * the root to its own ambient tone itself. mkoai 2.0.72: the tone
+     * is also published to MainActivity.pageTone, for tone-following
+     * renderPage pages (history) — those re-create their own root in
+     * renderPage, so this method cannot paint them directly; and the
+     * shell's Layer 0 canvas is invalidated here, because since
+     * 2.0.72 it paints the tone itself instead of an opaque frost
+     * field (the frost hid the root colour, so the tabs never
+     * actually followed the tone).
      */
     private void applyPageTone() {
         if (a.root == null) return;
         int want = currentSite != null ? heroDiffusionShown : 0xff141414;
+        a.pageTone = want;
         android.graphics.drawable.Drawable bg = a.root.getBackground();
         if (bg instanceof android.graphics.drawable.ColorDrawable
                 && ((android.graphics.drawable.ColorDrawable) bg).getColor() == want) return;
         a.root.setBackgroundColor(want);
+        if (ambientCanvas != null) ambientCanvas.invalidate();
     }
 
     /** The synchronous per-tab build, run on the next frame by switchTab. */
@@ -3285,18 +3292,26 @@ final class MobileShell {
      * (statusBarHeight + 24dp), exactly the 2.0.64-2.0.68 look — those
      * pages have no hero art to melt, and a tall dark veil would wash
      * over their titles.
-     * mkoai 2.0.71: the home veil is pulled back to statusBarHeight
-     * + 150dp (user: the top + bottom fog is too heavy) — same
-     * topFadeColors shape, so on a POCO F5 the veil is ~191dp tall:
-     * opaque to ~27dp, half at ~55dp, transparent from ~82dp. The
-     * status bar's bottom edge still sits on ~82% tone (the opaque
-     * zone covers its top ~27dp), the bar (top ~61dp, bottom ~109dp,
-     * unchanged since 2.0.69) sits on ~38% tone at its top edge and
-     * on clean art below ~82dp — the white pill and circles read on
-     * both — and the art is fully clean below ~82dp.
+     * mkoai 2.0.72: the home veil is gone entirely (user: the
+     * poster's top should have no fog, flush with the top) - the
+     * tall veil was what made the hero read as a poster pasted on
+     * the page, and the 2.0.69 hard-edge reason for it no longer
+     * applies once there is no veil edge at all. The top pill and
+     * circles sit directly on the art now; their own glass
+     * backgrounds (topPillBg, tone-aware) carry them, and the
+     * bottom scrim still protects the title. On every other tab
+     * the veil stays the short status-bar veil, exactly as before.
+     * topFadeColors itself is unchanged - it still builds the
+     * other tabs' veil.
      */
     private int topFadeHeightPx() {
-        return statusBarHeight() + a.dp(activeTab == 0 ? 150 : 24);
+        // mkoai 2.0.72: no top veil on the home tab at all - the hero
+        // poster runs clean to the very top edge (user: the poster's
+        // top should have no fog, flush with the top). Other tabs
+        // keep the short status-bar veil (statusBarHeight + 24dp):
+        // below it is flat page tone, no poster, so nothing is lost.
+        if (activeTab == 0) return 0;
+        return statusBarHeight() + a.dp(24);
     }
 
     /** Resize the top veil for the current tab (no-op when unchanged). */
@@ -3360,6 +3375,11 @@ final class MobileShell {
         // mkoai 2.0.71: the page background follows the hero tone on
         // every tab (guarded inside: no-op when unchanged).
         applyPageTone();
+        // mkoai 2.0.72: a tone-following renderPage page (history)
+        // re-tints with the hero too — retintRenderPage no-ops
+        // unless the current scroll carries the tone-page tag, so
+        // the shell and every other renderPage page are untouched.
+        a.retintRenderPage();
     }
 
     /**
@@ -8687,11 +8707,17 @@ final class MobileShell {
                 }
             }
 
-            // 2.0.41: no custom wallpaper — the shared frosted-matte dark
-            // base (same as the home ambient and the renderPage ambient),
-            // instead of the old emerald gradient + green glow. Clean,
-            // dark, no colour cast, no poster colours anywhere.
-            HomeAmbient.paintFrost(canvas, w, h, paint);
+            // mkoai 2.0.72: no custom wallpaper - a flat field of the
+            // current hero tone, published by applyPageTone (see
+            // MainActivity.pageTone). 2.0.71 painted the shared frost
+            // here, an opaque dark field that hid the root colour, so
+            // the search / live / my / settings tabs never actually
+            // followed the tone even though applyPageTone set it.
+            // Before the first tone lands the field is DARK, the same
+            // near-black the frost was, so first paint is unchanged;
+            // the home tab never shows this layer (its ScrollView
+            // bloom is opaque over it).
+            canvas.drawColor(a != null ? a.pageTone : 0xff141414);
         }
     }
 
@@ -8709,13 +8735,11 @@ final class MobileShell {
         // setBaseColor landed.
         // mkoai 2.0.69: the gradient is HeroDiffusion2063.topFadeColors
         // (opaque tone through ~14% of the view's height, half at
-        // ~29%, transparent from ~43%) and the view is TALL on the
-        // home tab (statusBarHeight + 250dp, see updateTopFadeHeight),
-        // so the hero art emerges out of the page tone at the top
-        // instead of starting at a hard screen-edge cut — the mirror
-        // of the bottom scrim. The old 3-stop fadeColors veil ended at
-        // statusBarHeight + 24dp and left raw art right below it, so
-        // the hero still read as a poster pasted on the page.
+        // ~29%, transparent from ~43%). mkoai 2.0.72: the view is
+        // 0-height on the home tab (no top veil - the poster runs
+        // clean to the top edge); on other tabs it is the short
+        // status-bar veil (statusBarHeight + 24dp). The bottom
+        // scrim is untouched, so the title keeps its protection.
         private int baseRgb = HomeRows2061.HOME_SLATE_BG;
 
         // mkoai 2.0.70: the gradient shader is rebuilt only when the

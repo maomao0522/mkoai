@@ -496,7 +496,7 @@ final class HeroDiffusion2063 {
      * at rest), then fades outward into the far colour over the rest of
      * the page. Eight evenly spaced stops: every stop at or above the
      * hold is the tone itself, the stops below it ramp the tone into
-     * the far colour ({@link #backgroundTone} of the tone). With the
+     * the far colour ({@link #pageTone} of the tone, since 2.0.72). With the
      * hold at 0.40 the shape is the same as {@link #bloomColors}; with
      * the hold at the hero's bottom edge the hero's bottom scrim (which
      * ends at the full tone) meets exactly the tone behind it, in every
@@ -504,14 +504,25 @@ final class HeroDiffusion2063 {
      * greyer — never grey and never black. mkoai 2.0.66: on a light
      * page the far colour is {@link #pageTone} of the tone (a slightly
      * deeper light tone, still light — the snap guarantees it), so the
-     * bloom never fades a light page down into darkness; on a dark
-     * page the far colour is still {@link #backgroundTone}, exactly
-     * today's look.
+     * bloom never fades a light page down into darkness. mkoai
+     * 2.0.72: the dark side is the same now - the far colour is
+     * {@link #pageTone} of the tone on both sides. backgroundTone
+     * (30% toward grey, 65% brightness) faded a dark page's bottom
+     * into grey: measured on the user's Wenwu hero, the tone is a
+     * brown #70564b (saturation 0.198) but the far was #453934
+     * (saturation 0.140) - the bottom of the home page read grey,
+     * not the poster's colour. pageTone keeps the hue and most of
+     * the saturation (far #645047, saturation 0.170 on that hero),
+     * and the snap inside pageTone still guarantees the far stays
+     * dark (luminance at most ~0.13) on a dark page, so the
+     * light/dark flip and the text contrast hold. backgroundTone
+     * stays for the legacy {@link #bloomColors} shape (pinned by
+     * the 2063-2065 regression checks).
      */
     static int[] bloomColorsAnchored(int bg, float holdFraction) {
         float hold =
                 Math.max(HOLD_FRACTION_MIN, Math.min(HOLD_FRACTION_MAX, holdFraction));
-        int far = HomeTone2066.isLight(bg) ? pageTone(bg) : backgroundTone(bg);
+        int far = pageTone(bg);
         int[] out = new int[ANCHORED_BLOOM_STOPS];
         for (int i = 0; i < ANCHORED_BLOOM_STOPS; i++) {
             float pos = i / (float) (ANCHORED_BLOOM_STOPS - 1);

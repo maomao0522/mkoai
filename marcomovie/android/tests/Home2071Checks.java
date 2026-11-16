@@ -11,13 +11,13 @@ package app.mkoai.player;
  * wide, 1 image px = 0.4268dp, statusBarHeight() ~= 41dp, the system
  * status bar itself ~37dp, hero 589.5dp tall).
  *
- * (1) Top veil: statusBarHeight + 250dp -> + 150dp, same
- * topFadeColors shape (opaque through 1/7, half at 2/7, transparent
- * from 3/7). New veil is ~191dp tall: opaque to ~27dp, half at
- * ~55dp, transparent from ~82dp. The status bar's bottom edge still
- * sits on ~82% tone; the bar (top ~49dp after the 2.0.71 move up,
- * bottom ~89dp) sits on ~60% tone at its top edge and on clean art
- * below ~82dp. The art is fully clean below ~82dp.
+ * (1) Top veil: GONE on the home tab (2.0.72, was statusBarHeight
+ * + 150dp) - the hero poster runs clean to the very top edge, no
+ * fog. topFadeColors is unchanged (it still builds the other
+ * tabs' veil: statusBarHeight + 24dp, ~65dp). The bar (top ~49dp,
+ * bottom ~89dp) now sits directly on the art; its own glass
+ * backgrounds carry it, and the bottom scrim still protects the
+ * title.
  *
  * (2) Bottom scrim: five transparent stops now (was four), 25% at
  * 5/7, 75% at 6/7, opaque page tone at the bottom. The fade starts
@@ -109,36 +109,17 @@ public class Home2071Checks {
                         && top[7] == 0x00000000,
                 "topFadeColors: transparent from the fourth stop to the bottom (unchanged)");
 
-        // ---- the pulled-back home veil: where the stops land ----
-        double veilH = sbFn + 150.0;
-        near(veilH, 191.0, 0.5, "home veil height is ~191dp (statusBar + 150dp, was 291dp)");
-        double opaqueEnd = veilH / 7.0;
-        double halfAt = 2.0 * veilH / 7.0;
-        double clearFrom = 3.0 * veilH / 7.0;
-        near(opaqueEnd, 27.3, 0.5, "veil opaque through ~27.3dp (was ~41.6dp)");
-        near(halfAt, 54.6, 0.5, "veil half tone at ~54.6dp (was ~83.1dp)");
-        near(clearFrom, 81.9, 0.5, "veil fully transparent from ~81.9dp (was ~124.7dp)");
-        check(opaqueEnd < sbSys,
-                "veil opaque zone no longer covers the whole status bar (27dp < 37dp) — by design, it is thinner now");
-        // Veil alpha at the status bar's bottom edge (37dp): between the
-        // opaque stop (1/7) and the half stop (2/7).
-        double alphaSbBottom = 1.0 - (sbSys / veilH - 1.0 / 7.0) / (1.0 / 7.0) * 0.5;
-        near(alphaSbBottom, 0.82, 0.03, "veil alpha at the status-bar bottom is ~0.82 (still mostly tone)");
-        // Veil alpha at the bar top (49dp): same interpolation.
-        double alphaTop = 1.0 - (newBarTop / veilH - 1.0 / 7.0) / (1.0 / 7.0) * 0.5;
-        near(alphaTop, 0.60, 0.03, "veil alpha at the bar top is ~0.60 (was ~0.77)");
-        // Veil alpha at the bar bottom (89dp): past the transparent stop.
-        double alphaBottom = 0.5 - (newBarBottom / veilH - 2.0 / 7.0) / (1.0 / 7.0) * 0.5;
-        if (alphaBottom < 0) alphaBottom = 0;
-        near(alphaBottom, 0.0, 0.01, "veil alpha at the bar bottom is 0 (fully clean art, was ~0.19)");
-        check(newBarTop < halfAt && halfAt < newBarBottom,
-                "veil half tone lands inside the bar span (49-89dp): the bar's top sits on tone, its bottom on art");
-        check(clearFrom > newBarTop && clearFrom < newBarBottom,
-                "veil clears inside the bar span (81.9dp): the bar's lower half is on raw art, by design");
-        check(clearFrom < 300.0,
-                "veil clears well above the hero title zone (~300dp+): the art is clean in the middle");
-        check(alphaTop > alphaBottom && alphaTop < 0.7 && alphaBottom == 0.0,
-                "veil fades across the bar: ~60% tone at its top, clean art at its bottom");
+        // ---- the home veil is gone (2.0.72): no fog on the poster top ----
+        // topFadeHeightPx() returns 0 on the home tab, so the hero
+        // poster runs clean to the very top edge. The stop-position
+        // arithmetic the old 191dp veil pinned is meaningless for a
+        // 0-height view and is deleted with it; topFadeColors itself
+        // is unchanged (pinned above) and still builds the other
+        // tabs' veil.
+        double veilH = 0.0;
+        near(veilH, 0.0, 0.5, "home veil height is 0dp (no top fog on the poster, was 191dp)");
+        check(veilH < sbSys,
+                "no veil over the status bar on home: the poster is flush with the top edge");
 
         // ---- the short veil on other tabs is unchanged ----
         double otherVeilH = sbFn + 24.0;

@@ -158,6 +158,34 @@ final class HomeTone2066 {
         return isLight(bg) ? TEXT_MUTED_LIGHT_BG : TEXT_MUTED_DARK_BG;
     }
 
+    /**
+     * mkoai 2.0.72: the colour roles a tone-following renderPage walk
+     * recognises (history page). A TextView's CURRENT colour decides
+     * its role, so the walk is closed under repeated flips: a colour
+     * the walk wrote is recognised again on the next flip and mapped
+     * to the other side's value, never left stranded. Colours that
+     * are not a role (dark-glass text, the progress red, the
+     * half-transparent poster fallback) are returned unchanged.
+     * PRIMARY: the page white (MainActivity.WHITE) and the two
+     * primary values themselves. MUTED: the page muted grey plus the
+     * other muted greys the settings walk already recognises (same
+     * family, so the two walks agree). ACCENT: the renderPage
+     * eyebrow blue plus the two accent values themselves.
+     */
+    static final int[] PAGE_PRIMARY_COLORS = {0xfff5f5f7, 0xffffffff, 0xff111827};
+    static final int[] PAGE_MUTED_COLORS = {
+        0xffa1a1aa, 0xff9ca3af, 0xffd1d1da, 0xffd1d5db, 0xffe5e7eb, 0xff374151
+    };
+    static final int[] PAGE_ACCENT_COLORS = {0xffa9c9f3, 0xff5ac8fa, 0xff0d47a1};
+
+    /** Re-tint one flat-page text colour for a page background, by its current-colour role. */
+    static int retintPageColor(int color, int bg) {
+        for (int c : PAGE_PRIMARY_COLORS) if (c == color) return primaryText(bg);
+        for (int c : PAGE_MUTED_COLORS) if (c == color) return mutedText(bg);
+        for (int c : PAGE_ACCENT_COLORS) if (c == color) return accentText(bg);
+        return color;
+    }
+
     /** Floating top pill background for a page background. */
     static int topPillBg(int bg) {
         return isLight(bg) ? TOP_PILL_LIGHT_BG : TOP_PILL_DARK_BG;

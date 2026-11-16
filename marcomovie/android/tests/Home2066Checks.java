@@ -21,9 +21,9 @@ import java.util.Map;
  *      0.30, the per-side colours, and the WCAG contrast at both
  *      empirical band extremes (worst dark 0xff566756, worst light
  *      0xff55cf55) plus the dock's selected label on its light pill.
- *  bloomColorsAnchored — light-aware far colour (pageTone for a
- *      light tone, backgroundTone for a dark one — dark heroes
- *      byte-identical to 2.0.65); bloomColors unchanged (pin).
+ *  bloomColorsAnchored — far colour is pageTone on both sides
+ *      (2.0.72: the dark far was backgroundTone, which faded the
+ *      page bottom grey); bloomColors unchanged (pin).
  *  HomeYear2066 — the year rules: rec cutoff 2022 (4y), hero cutoff
  *      2024 (2y); the hard filter drops Titanic 1997 / Truman 1998 /
  *      Interstellar 2014 but keeps unknown-year titles (fail-open);
@@ -232,9 +232,9 @@ public class Home2066Checks {
         eq((int) (HeroDiffusion2063.heroBottomFraction(0f, 589.5f, 0f) * 100), 40,
                 "heroBottomFraction: a zero viewport never divides, holds 0.40");
 
-        // ---- bloomColorsAnchored: light-aware far colour ----
+        // ---- bloomColorsAnchored: far colour is pageTone on both sides (2.0.72) ----
         int tone = 0xff484d53;
-        int far = HeroDiffusion2063.backgroundTone(tone);
+        int far = HeroDiffusion2063.pageTone(tone);
         int[] poco = HeroDiffusion2063.bloomColorsAnchored(tone, 0.6753f);
         eq(poco.length, HeroDiffusion2063.ANCHORED_BLOOM_STOPS,
                 "anchored bloom: eight stops");
@@ -244,7 +244,7 @@ public class Home2066Checks {
         check(poco[5] != tone && poco[6] != tone,
                 "anchored bloom: at the POCO hold the fade starts only below the hero");
         eq(poco[7], far,
-                "anchored bloom: a dark hero's far colour is still backgroundTone(tone) — byte-identical to 2.0.65");
+                "anchored bloom (2.0.72): a dark hero's far colour is pageTone(tone), not backgroundTone - the page bottom keeps the poster's colour instead of fading grey");
         int lightTone = 0xffe0ddd5;
         int[] lightBloom = HeroDiffusion2063.bloomColorsAnchored(lightTone, 0.6753f);
         eq(lightBloom[7], HeroDiffusion2063.pageTone(lightTone),
@@ -261,8 +261,8 @@ public class Home2066Checks {
                 "bloomColors unchanged: six stops");
         check(bloom[0] == tone && bloom[1] == tone && bloom[2] == tone,
                 "bloomColors unchanged: the tone holds for the top three stops");
-        eq(bloom[5], far,
-                "bloomColors unchanged: the far colour holds to the bottom");
+        eq(bloom[5], HeroDiffusion2063.backgroundTone(tone),
+                "bloomColors unchanged: the far colour holds to the bottom (legacy shape still ends on backgroundTone)");
 
         // ---- HomeYear2066: cutoffs + parsing ----
         eq(HomeYear2066.recCutoffYear(2026), 2022,
