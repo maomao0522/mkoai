@@ -2,11 +2,11 @@
 # mkoai 2.0.69 checks — real-code JVM checks + static regression checks.
 # Runs Home2069Checks (top-bar + top-veil geometry on the measured POCO
 # F5 numbers), plus static greps for the one item:
-# (1) top bar moved down (statusBarHeight + 8dp -> + 20dp, badge follows
-#     + 66dp -> + 78dp) AND the top gets the hero diffusion feel: the
-#     root-level TopEdgeFadeView now uses the topFadeColors gradient and
-#     is TALL on the home tab (statusBarHeight + 250dp), short on other
-#     tabs (statusBarHeight + 24dp) — so the hero art emerges out of
+# (1) top bar moved back up in 2.0.71 (statusBarHeight + 20dp -> + 8dp,
+#     badge follows + 78dp -> + 58dp) AND the top gets the hero diffusion
+#     feel: the root-level TopEdgeFadeView now uses the topFadeColors
+#     gradient and is TALL on the home tab (statusBarHeight + 150dp in
+#     2.0.71, was 250dp), short on other tabs (statusBarHeight + 24dp) — so the hero art emerges out of
 #     the page tone at the top instead of starting at a hard cut, and
 #     no longer reads as a poster pasted on the page. The in-card top
 #     fade stays gone; the bottom scrim, bloom, grid, subtitles
@@ -159,14 +159,14 @@ def main():
     hs = read("HomeScreen.java")
 
     # ---- Static (1a): the top bar moves down ----
-    check("overlayLp.topMargin = statusBarHeight() + a.dp(20);" in ms,
-          "(1a) overlay topMargin is statusBarHeight + 20dp (was + 8dp)")
-    check("overlayLp.topMargin = statusBarHeight() + a.dp(8);" not in ms,
-          "(1a) the old + 8dp overlay margin is gone")
-    check("badgeLp.topMargin = statusBarHeight() + a.dp(78);" in ms,
-          "(1a) badge topMargin is statusBarHeight + 78dp (was + 66dp, still 10dp below the bar)")
-    check("badgeLp.topMargin = statusBarHeight() + a.dp(66);" not in ms,
-          "(1a) the old + 66dp badge margin is gone")
+    check("overlayLp.topMargin = statusBarHeight() + a.dp(8);" in ms,
+          "(1a) overlay topMargin is statusBarHeight + 8dp again (2.0.71: moved back up from + 20dp)")
+    check("overlayLp.topMargin = statusBarHeight() + a.dp(20);" not in ms,
+          "(1a) the 2.0.69 + 20dp overlay margin is gone")
+    check("badgeLp.topMargin = statusBarHeight() + a.dp(58);" in ms,
+          "(1a) badge topMargin is statusBarHeight + 58dp (was + 78dp, still 10dp below the bar)")
+    check("badgeLp.topMargin = statusBarHeight() + a.dp(78);" not in ms,
+          "(1a) the 2.0.69 + 78dp badge margin is gone")
     check("buildHomeTopHeaderRow()" in ms
           and ms.count("buildHomeTopHeaderRow()") == 2,
           "(1a) the top bar is built by the single buildHomeTopHeaderRow (definition + one call site)")
@@ -185,8 +185,8 @@ def main():
           "(1b) the veil gradient has the 8 evenly spaced topFadeColors stops")
     check("topFadeHeightPx()" in ms and "updateTopFadeHeight()" in ms,
           "(1b) the veil height helpers exist (topFadeHeightPx / updateTopFadeHeight)")
-    check("statusBarHeight() + a.dp(activeTab == 0 ? 250 : 24)" in ms,
-          "(1b) veil height is statusBarHeight + 250dp on home, + 24dp on other tabs")
+    check("statusBarHeight() + a.dp(activeTab == 0 ? 150 : 24)" in ms,
+          "(1b) veil height is statusBarHeight + 150dp on home, + 24dp on other tabs")
     check(ms.count("updateTopFadeHeight()") >= 2,
           "(1b) updateTopFadeHeight is defined and called from switchTab (height follows the tab)")
     upd = ms[ms.index("private void updateTopFadeHeight()"):]
@@ -245,14 +245,14 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.70"' in ev and "20071" in ev, "edition-versions.json = 2.0.70 / 20071")
+    check('"2.0.71"' in ev and "20072" in ev, "edition-versions.json = 2.0.71 / 20072")
     import json as _json
     lite = _json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.70"' in man and 'android:versionCode="20071"' in man,
-          "AndroidManifest.xml = 2.0.70 / 20071")
+    check('android:versionName="2.0.71"' in man and 'android:versionCode="20072"' in man,
+          "AndroidManifest.xml = 2.0.71 / 20072")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

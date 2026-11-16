@@ -38,6 +38,18 @@ package app.mkoai.player;
  *  - the hero title block is Gravity.BOTTOM-anchored in the card, so
  *    its top is never above ~300dp even in the tallest case — the
  *    lowered bar (bottom 109dp) cannot touch it.
+ * mkoai 2.0.71 (this file updated in place — the repo's pattern is
+ * to move the pin when a later version deliberately changes it, the
+ * same way 2.0.69 moved the 2065/2066 pins): the fog is pulled back
+ * and the bar moves back up and shrinks. New numbers: bar top =
+ * 41 + 8 = 49dp (12dp of daylight again), bar bottom = 49 + 40 =
+ * 89dp, badge top = 41 + 58 = 99dp (8 + 40 + 10 = 58, still 10dp
+ * below the bar); home veil = 41 + 150 = 191dp tall (opaque to
+ * ~27dp, half at ~55dp, transparent from ~82dp — the status bar's
+ * bottom edge still sits on ~82% tone, the bar top on ~60% tone,
+ * the bar bottom on clean art); bottom scrim: five transparent
+ * stops, 25% at 5/7, 75% at 6/7, opaque at the bottom (fade from
+ * ~71% of the hero, covering the bottom ~29%).
  * The wiring (exact margin strings, the veil gradient + heights, the
  * switchTab resize, the in-card top fade staying gone) is
  * source-checked by the runner.
@@ -73,25 +85,25 @@ public class Home2069Checks {
         // ---- measured POCO F5 inputs (2.0.68 screenshot, see class doc) ----
         double sbFn = 41.0; // statusBarHeight() (the function)
         double sbSys = 37.0; // the system status bar itself
-        double barH = 48.0; // pill + circles height
+        double barH = 40.0; // pill + circles height (2.0.71: shrank 48dp -> 40dp)
         double heroH = 589.5; // heroHeightDp(393)
 
-        // ---- the bar moves down: old +8dp, new +20dp ----
-        double oldBarTop = sbFn + 8.0;
-        double newBarTop = sbFn + 20.0;
-        near(oldBarTop, 49.0, 0.5, "old bar top was ~49dp (measured 49.5dp)");
-        near(oldBarTop - sbSys, 12.0, 0.5, "old daylight under the status bar was only ~12dp");
-        near(newBarTop, 61.0, 0.5, "new bar top is ~61dp (moved down 12dp)");
-        near(newBarTop - sbSys, 24.0, 0.5, "new daylight under the status bar is ~24dp (doubled)");
+        // ---- the bar moves back up and shrinks: 2.0.69 +20dp/48dp, 2.0.71 +8dp/40dp ----
+        double oldBarTop = sbFn + 20.0;
+        double newBarTop = sbFn + 8.0;
+        near(oldBarTop, 61.0, 0.5, "2.0.69 bar top was ~61dp (statusBar + 20dp)");
+        near(oldBarTop - sbSys, 24.0, 0.5, "2.0.69 daylight under the status bar was ~24dp");
+        near(newBarTop, 49.0, 0.5, "new bar top is ~49dp (moved back up 12dp)");
+        near(newBarTop - sbSys, 12.0, 0.5, "new daylight under the status bar is ~12dp again");
         double newBarBottom = newBarTop + barH;
-        near(newBarBottom, 109.0, 0.5, "new bar bottom is ~109dp");
+        near(newBarBottom, 89.0, 0.5, "new bar bottom is ~89dp (49 + 40dp bar)");
 
-        // ---- the badge follows the bar down, same 10dp gap ----
-        double badgeTop = sbFn + 78.0;
-        near(badgeTop, 119.0, 0.5, "badge top is ~119dp (statusBar + 78dp)");
+        // ---- the badge follows the bar, same 10dp gap ----
+        double badgeTop = sbFn + 58.0;
+        near(badgeTop, 99.0, 0.5, "badge top is ~99dp (statusBar + 58dp)");
         near(badgeTop - newBarBottom, 10.0, 0.5, "badge stays 10dp below the bar");
-        near((sbFn + 66.0) - (oldBarTop + barH), 10.0, 0.5,
-                "old badge gap was also 10dp (66 = 8 + 48 + 10)");
+        near((sbFn + 78.0) - (oldBarTop + 48.0), 10.0, 0.5,
+                "2.0.69 badge gap was also 10dp (78 = 20 + 48 + 10)");
 
         // ---- topFadeColors shape (the function itself, unchanged) ----
         int tone = 0xff8a7f72;
@@ -107,31 +119,35 @@ public class Home2069Checks {
                 "topFadeColors: transparent from the fourth stop to the bottom");
 
         // ---- the tall home veil: where the stops land on a POCO F5 ----
-        double veilH = sbFn + 250.0;
-        near(veilH, 291.0, 0.5, "home veil height is ~291dp (statusBar + 250dp)");
+        // (2.0.71: pulled back 250dp -> 150dp — the numbers below are
+        // the new ones; the shape is unchanged.)
+        double veilH = sbFn + 150.0;
+        near(veilH, 191.0, 0.5, "home veil height is ~191dp (statusBar + 150dp, was 291dp)");
         double opaqueEnd = veilH / 7.0;
         double halfAt = 2.0 * veilH / 7.0;
         double clearFrom = 3.0 * veilH / 7.0;
-        near(opaqueEnd, 41.6, 0.5, "veil opaque through ~41.6dp");
-        check(opaqueEnd > sbSys,
-                "veil opaque zone covers the whole system status bar (~37dp)");
-        near(halfAt, 83.1, 0.5, "veil half tone at ~83dp");
+        near(opaqueEnd, 27.3, 0.5, "veil opaque through ~27.3dp (was ~41.6dp)");
+        double alphaSbBottom = 1.0 - (sbSys / veilH - 1.0 / 7.0) / (1.0 / 7.0) * 0.5;
+        near(alphaSbBottom, 0.82, 0.03,
+                "veil alpha at the status-bar bottom is ~0.82 (opaque zone covers only its top ~27dp now, still mostly tone)");
+        near(halfAt, 54.6, 0.5, "veil half tone at ~54.6dp (was ~83.1dp)");
         check(newBarTop < halfAt && halfAt < newBarBottom,
-                "veil half tone lands inside the bar span (61-109dp): the bar sits on the tone field");
-        near(clearFrom, 124.7, 0.5, "veil fully transparent from ~124.7dp");
-        check(clearFrom > newBarBottom,
-                "veil clears below the bar bottom, so the bar is never on raw art");
+                "veil half tone lands inside the bar span (49-89dp): the bar's top sits on tone, its bottom on art");
+        near(clearFrom, 81.9, 0.5, "veil fully transparent from ~81.9dp (was ~124.7dp)");
+        check(clearFrom > newBarTop && clearFrom < newBarBottom,
+                "veil clears inside the bar span (81.9dp): the bar's lower half is on raw art, by design");
         check(clearFrom < 300.0,
                 "veil clears well above the hero title zone (~300dp+): the art is clean in the middle");
-        // Veil alpha over the bar: 21% down the veil at the bar top
+        // Veil alpha over the bar: ~26% down the veil at the bar top
         // (between the opaque stop at 1/7 and the half stop at 2/7),
-        // 37.5% down at the bar bottom (between half and transparent).
+        // ~47% down at the bar bottom (past the transparent stop).
         double alphaTop = 1.0 - (newBarTop / veilH - 1.0 / 7.0) / (1.0 / 7.0) * 0.5;
         double alphaBottom = 0.5 - (newBarBottom / veilH - 2.0 / 7.0) / (1.0 / 7.0) * 0.5;
-        near(alphaTop, 0.77, 0.03, "veil alpha at the bar top is ~0.77 (mostly tone)");
-        near(alphaBottom, 0.19, 0.03, "veil alpha at the bar bottom is ~0.19 (mostly art showing)");
-        check(alphaTop > alphaBottom && alphaTop > 0.5 && alphaBottom < 0.5,
-                "veil fades across the bar: tone above it, art emerging below it");
+        if (alphaBottom < 0) alphaBottom = 0;
+        near(alphaTop, 0.60, 0.03, "veil alpha at the bar top is ~0.60 (was ~0.77)");
+        near(alphaBottom, 0.0, 0.01, "veil alpha at the bar bottom is 0 (fully clean art, was ~0.19)");
+        check(alphaTop > alphaBottom && alphaTop < 0.7 && alphaBottom == 0.0,
+                "veil fades across the bar: ~60% tone at its top, clean art at its bottom");
 
         // ---- the short veil on other tabs is unchanged ----
         double otherVeilH = sbFn + 24.0;
@@ -149,13 +165,16 @@ public class Home2069Checks {
         check(clearFrom < titleTopWorst,
                 "veil clears before the title zone: the title sits on clean art");
 
-        // ---- the bottom dissolve is untouched (scrim shape, pinned by 2064) ----
+        // ---- the bottom dissolve (2.0.71: pulled back — five transparent
+        // stops, 25% at 5/7, 75% at 6/7, opaque at the bottom) ----
         int[] scrim = HeroDiffusion2063.scrimColors(0xff8a7f72);
-        eq(scrim.length, 8, "bottom scrim: eight stops (unchanged)");
-        check(scrim[0] == 0x00000000 && scrim[3] == 0x00000000,
-                "bottom scrim: transparent over the top half (unchanged)");
+        eq(scrim.length, 8, "bottom scrim: eight stops");
+        check(scrim[0] == 0x00000000 && scrim[4] == 0x00000000,
+                "bottom scrim: transparent over the top five stops");
+        check(scrim[5] == 0x408a7f72 && scrim[6] == 0xc08a7f72,
+                "bottom scrim: 25% at 5/7, 75% at 6/7 (fade from ~71% of the hero)");
         check(scrim[7] == 0xff8a7f72,
-                "bottom scrim: ends on the opaque page colour (unchanged)");
+                "bottom scrim: ends on the opaque page colour");
 
         System.out.println(passed + " Home2069 checks passed");
     }

@@ -56,6 +56,17 @@ final class HomeTone2066 {
     /** Secondary text on a light background (dark slate grey). */
     static final int TEXT_MUTED_LIGHT_BG = 0xff374151;
 
+    /** Accent (link / section header) text on a dark background (the existing sky blue). */
+    static final int TEXT_ACCENT_DARK_BG = 0xff5ac8fa;
+
+    /** Accent text on a light background (deep blue — the sky blue is near-invisible on light). */
+    static final int TEXT_ACCENT_LIGHT_BG = 0xff0d47a1;
+
+    /** Accent (link / section header) text colour for a page background. */
+    static int accentText(int bg) {
+        return isLight(bg) ? TEXT_ACCENT_LIGHT_BG : TEXT_ACCENT_DARK_BG;
+    }
+
     /** Floating top pill / circles on a light background (near-white). */
     static final int TOP_PILL_LIGHT_BG = 0xf2ffffff;
 

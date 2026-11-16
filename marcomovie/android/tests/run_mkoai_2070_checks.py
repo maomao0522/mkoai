@@ -304,12 +304,12 @@ def main():
           "(D8) the synchronous full-size UI-thread decode is gone")
 
     # ---- Static: 2.0.69 items still hold ----
-    check("overlayLp.topMargin = statusBarHeight() + a.dp(20);" in ms,
-          "2.0.69 holds: top bar stays at statusBarHeight + 20dp")
-    check("badgeLp.topMargin = statusBarHeight() + a.dp(78);" in ms,
-          "2.0.69 holds: badge stays at statusBarHeight + 78dp")
-    check("statusBarHeight() + a.dp(activeTab == 0 ? 250 : 24)" in ms,
-          "2.0.69 holds: tall home veil (250dp) / short other-tab veil (24dp)")
+    check("overlayLp.topMargin = statusBarHeight() + a.dp(8);" in ms,
+          "2.0.71 moved: top bar is back at statusBarHeight + 8dp (was + 20dp in 2.0.69)")
+    check("badgeLp.topMargin = statusBarHeight() + a.dp(58);" in ms,
+          "2.0.71 moved: badge is back at statusBarHeight + 58dp (was + 78dp in 2.0.69)")
+    check("statusBarHeight() + a.dp(activeTab == 0 ? 150 : 24)" in ms,
+          "2.0.71 moved: home veil pulled back to 150dp (was 250dp) / short other-tab veil (24dp)")
     check("topFadeColors(baseRgb)" in top_fade,
           "2.0.69 holds: the root veil still uses topFadeColors")
     check("hero-diffusion-topfade" not in ms and "heroTopFades" not in ms,
@@ -363,14 +363,14 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.70"' in ev and "20071" in ev, "edition-versions.json = 2.0.70 / 20071")
+    check('"2.0.71"' in ev and "20072" in ev, "edition-versions.json = 2.0.71 / 20072")
     import json as _json
     lite = _json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.70"' in man and 'android:versionCode="20071"' in man,
-          "AndroidManifest.xml = 2.0.70 / 20071")
+    check('android:versionName="2.0.71"' in man and 'android:versionCode="20072"' in man,
+          "AndroidManifest.xml = 2.0.71 / 20072")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

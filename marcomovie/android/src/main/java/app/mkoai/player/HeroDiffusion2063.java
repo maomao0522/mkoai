@@ -394,13 +394,19 @@ final class HeroDiffusion2063 {
 
     /**
      * The hero bottom-fade scrim colours for page colour {@code bg}:
-     * four transparent stops, then the page colour ramping in at 25% /
-     * 50% / 75% alpha, then the opaque page colour — with evenly spaced
-     * stops the fade covers roughly the bottom 55% of the hero and ends
+     * five transparent stops, then the page colour ramping in at 25% /
+     * 75% alpha, then the opaque page colour — with evenly spaced
+     * stops the fade covers roughly the bottom 29% of the hero and ends
      * exactly on the page colour, so the hero dissolves into the page
      * with no hard edge and no black band between hero and rows. The
      * ramp is the page colour itself (not a black tint), so the image
      * melts into the bloom rather than darkening into black first.
+     * mkoai 2.0.71: the fade was pulled back (was: four transparent
+     * stops, 25% / 50% / 75% ramp, fade from ~57% of the hero height)
+     * because the user found the top + bottom fog too heavy — the
+     * poster's middle now stays clean further down, and the bottom
+     * edge still ends on the opaque page colour so there is no seam
+     * with the bloom anchored at the hero's bottom edge.
      */
     static int[] scrimColors(int bg) {
         int rgb = bg & 0x00ffffff;
@@ -409,8 +415,8 @@ final class HeroDiffusion2063 {
             0x00000000,
             0x00000000,
             0x00000000,
+            0x00000000,
             0x40000000 | rgb,
-            0x80000000 | rgb,
             0xc0000000 | rgb,
             bg
         };

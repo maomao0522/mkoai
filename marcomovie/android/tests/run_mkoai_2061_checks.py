@@ -144,7 +144,7 @@ def main():
     check("a.text(\"▶ 播放\"" not in ms, "(b) the hero has no ▶ 播放 button any more")
     check("featured.description" in ms, "(b) the hero shows a description")
     check("Dots" in ms or "dot" in ms.lower(), "(b) the hero keeps its carousel dots")
-    check("nav-more" in ms, "(b) the header has the ... menu button")
+    check("nav-more" not in ms, "(b) the ... menu button is gone in 2.0.71 (it only opened Settings, duplicating the dock)")
     hr = read("HomeRows2061.java")
     check("热门电影" in hr and "热门剧集" in hr and "豆瓣高分" in hr,
           "(b) Simplified row labels are present")
@@ -314,13 +314,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.70"' in ev and "20071" in ev, "edition-versions.json = 2.0.70 / 20071")
+    check('"2.0.71"' in ev and "20072" in ev, "edition-versions.json = 2.0.71 / 20072")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.70"' in man and 'android:versionCode="20071"' in man,
-          "AndroidManifest.xml = 2.0.70 / 20071")
+    check('android:versionName="2.0.71"' in man and 'android:versionCode="20072"' in man,
+          "AndroidManifest.xml = 2.0.71 / 20072")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

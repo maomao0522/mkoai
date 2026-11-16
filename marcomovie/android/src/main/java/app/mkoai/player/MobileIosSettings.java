@@ -184,8 +184,13 @@ final class MobileIosSettings {
         final ScrollView sv = new ScrollView(a);
         sv.setVerticalScrollBarEnabled(false);
         sv.setClipToPadding(false);
-        // mkoai 2.0.39: VidHub-style grouped cards, mkoai dark theme (was light in 2.0.38).
-        sv.setBackgroundColor(0xff141414);
+        // mkoai 2.0.71: transparent — the page background is the hero
+        // tone painted on a.root by MobileShell.applyPageTone (every tab
+        // follows the home colour now); a fixed dark ScrollView would
+        // cover it. The flat settings texts are re-tinted for the tone
+        // by MobileShell.retintSettingsNow (called at the end of this
+        // method and on every diffusion flip).
+        sv.setBackgroundColor(0x00000000);
         int topInset = getStatusBarHeight(a);
         int bottomDockClearance = a.dp(116) + a.navigationBarHeight();
         sv.setPadding(a.dp(20), topInset + a.dp(14), a.dp(20), bottomDockClearance);
@@ -214,10 +219,20 @@ final class MobileIosSettings {
 
         if (activePane == null) {
             // ==================== LEVEL 1: PRIMARY SETTINGS PAGE ====================
+            // mkoai 2.0.71: the account button lives here now (moved from
+            // the top bar, user-approved one-time edit) — title on the
+            // left, the 40dp account button top-right, vertically
+            // centred with the title.
+            LinearLayout headerRow = a.row();
+            headerRow.setGravity(Gravity.CENTER_VERTICAL);
             TextView largeTitle = a.text("設定", 32f, 0xfff5f5f7);
             largeTitle.setTypeface(null, Typeface.BOLD);
             largeTitle.setLetterSpacing(-0.02f);
-            rootCol.addView(largeTitle, new LinearLayout.LayoutParams(-1, -2));
+            headerRow.addView(largeTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+            // The button carries its own size (40dp circle, or a 40dp
+            // tall wrap-content pill when signed out).
+            headerRow.addView(buildAccountButton(a));
+            rootCol.addView(headerRow, new LinearLayout.LayoutParams(-1, -2));
 
             a.gap(rootCol, 6);
 
@@ -340,6 +355,12 @@ final class MobileIosSettings {
                     .setInterpolator(new DecelerateInterpolator())
                     .start();
         }
+        // mkoai 2.0.71: this page is flat (white/grey text directly on
+        // the page background), so re-tint it for the current hero tone
+        // at once — a build landing on a light hero would otherwise
+        // stay white-on-light until the next rotation. The diffusion
+        // flip block re-tints again while sitting on this tab.
+        if (shell != null) shell.retintSettingsNow();
     }
 
     private static void addSubSectionCard(
@@ -1553,6 +1574,65 @@ final class MobileIosSettings {
         top.add(disclaimerPane);
 
         return top;
+    }
+
+    /**
+     * mkoai 2.0.71: the account button, moved from the top bar to the
+     * settings header's top-right corner (user-approved one-time
+     * edit). Signed in: a 40dp circle with the email initial, opening
+     * the account sync page (Google sign-in / sync now / sign out /
+     * QR login for TV — the same page the old top button opened).
+     * Signed out: a "登入" pill starting Google sign-in. Dark glass
+     * on any page tone (white initial stays readable); the settings
+     * tone-walk skips this subtree via the "settings-account" tag.
+     */
+    private static View buildAccountButton(final MainActivity a) {
+        boolean signedIn = SupabaseAuth.isSignedIn(a);
+        if (signedIn) {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setShape(GradientDrawable.OVAL);
+            bg.setColor(0xcc222226);
+            bg.setStroke(Math.max(1, a.dp(1)), 0x36ffffff);
+            FrameLayout circle = new FrameLayout(a);
+            circle.setTag("settings-account");
+            circle.setBackground(bg);
+            circle.setElevation(a.dp(4));
+            circle.setLayoutParams(
+                    new LinearLayout.LayoutParams(a.dp(40), a.dp(40)));
+            bindPressFeedback(circle);
+            circle.setOnClickListener(
+                    v ->
+                            a.open(
+                                    new MainActivity.Screen(
+                                            () -> new SettingsScreen(a).accountSync()),
+                                    true));
+            String mail = SupabaseAuth.email(a);
+            String initial =
+                    (mail == null || mail.isEmpty())
+                            ? "G"
+                            : mail.substring(0, 1).toUpperCase(Locale.ROOT);
+            TextView initialTv = a.text(initial, 12.5f, MainActivity.WHITE);
+            initialTv.setGravity(Gravity.CENTER);
+            circle.addView(initialTv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+            return circle;
+        } else {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setShape(GradientDrawable.RECTANGLE);
+            bg.setCornerRadius(a.dp(999));
+            bg.setColor(0xcc222226);
+            bg.setStroke(Math.max(1, a.dp(1)), 0x36ffffff);
+            TextView loginPill = a.text("登入", 11, MainActivity.WHITE);
+            loginPill.setTag("settings-account");
+            loginPill.setGravity(Gravity.CENTER);
+            loginPill.setPadding(a.dp(10), 0, a.dp(10), 0);
+            loginPill.setBackground(bg);
+            loginPill.setElevation(a.dp(4));
+            loginPill.setLayoutParams(
+                    new LinearLayout.LayoutParams(-2, a.dp(40)));
+            bindPressFeedback(loginPill);
+            loginPill.setOnClickListener(v -> SupabaseAuth.signInWithGoogle(a));
+            return loginPill;
+        }
     }
 
     /**

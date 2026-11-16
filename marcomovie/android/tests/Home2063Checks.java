@@ -15,10 +15,10 @@ package app.mkoai.player;
  *      saturation and 65% of the brightness (was 45% / 55%), clamp
  *      stays 140 as the white-text contrast guard
  *  lerpColor — endpoints, midpoint, t clamped outside 0..1
- *  scrimColors — 8 stops, first four transparent, the page colour
- *      ramping in at 25% / 50% / 75% alpha, opaque page colour at the
- *      eighth (fade over the bottom ~55% of the hero, ending exactly
- *      on the page colour)
+ *  scrimColors — 8 stops, first five transparent (2.0.71: was four),
+ *      the page colour ramping in at 25% / 75% alpha, opaque page
+ *      colour at the eighth (fade over the bottom ~29% of the hero,
+ *      ending exactly on the page colour)
  *  FALLBACK_BG — the same slate the 2.0.61 home already uses
  * Covers HeroSwipe2063 — all pure:
  *  isTap — 12dp slop, both axes
@@ -147,17 +147,18 @@ public class Home2063Checks {
         eq(HeroDiffusion2063.lerpColor(0xff6b7683, 0xff4e2626, 0.5f),
                 0xff5d4e55, "lerpColor: slate to muted red at t=0.5");
 
-        // ---- scrimColors ---- (2.0.64: 8 stops, tone ramps in)
+        // ---- scrimColors ---- (2.0.64: 8 stops, tone ramps in;
+        // 2.0.71: the ramp moves back one stop — five transparent, then
+        // 25% at 5/7 and 75% at 6/7, the 50% stop is gone)
         int[] scrim = HeroDiffusion2063.scrimColors(0xff112233);
         eq(scrim.length, HeroDiffusion2063.SCRIM_STOPS,
                 "scrimColors: eight stops");
         check(scrim[0] == 0x00000000 && scrim[1] == 0x00000000
-                        && scrim[2] == 0x00000000 && scrim[3] == 0x00000000,
-                "scrimColors: first four stops fully transparent (fade only at the bottom)");
-        eq(scrim[4], 0x40112233,
-                "scrimColors: fifth stop is the page colour at 25% alpha");
-        eq(scrim[5], 0x80112233,
-                "scrimColors: sixth stop is the page colour at 50% alpha");
+                        && scrim[2] == 0x00000000 && scrim[3] == 0x00000000
+                        && scrim[4] == 0x00000000,
+                "scrimColors: first five stops fully transparent (fade only at the bottom)");
+        eq(scrim[5], 0x40112233,
+                "scrimColors: sixth stop is the page colour at 25% alpha");
         eq(scrim[6], 0xc0112233,
                 "scrimColors: seventh stop is the page colour at 75% alpha");
         eq(scrim[7], 0xff112233,

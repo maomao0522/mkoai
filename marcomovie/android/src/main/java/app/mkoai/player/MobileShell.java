@@ -203,6 +203,10 @@ final class MobileShell {
     // shadow look on the photo.
     private static final int HOME_TEXT_PRIMARY = 0;
     private static final int HOME_TEXT_MUTED = 1;
+    // mkoai 2.0.71: a third role for blue link / section-header text —
+    // the sky blue is near-invisible on a light page, so it deepens
+    // there (see HomeTone2066.accentText).
+    private static final int HOME_TEXT_ACCENT = 2;
     private final java.util.List<View> homeTextViews = new ArrayList<>();
     private final java.util.List<Integer> homeTextRoles = new ArrayList<>();
     private boolean homeTextDirty = false;
@@ -226,12 +230,20 @@ final class MobileShell {
     // so the flip block in applyDiffusionFrame can re-tint it with the
     // page tone; it used to be a render-local with a fixed dark base).
     private BottomEdgeFadeView bottomEdgeFade;
-    private final View[] navTabs = new View[5];
-    private final TextView[] navLabels = new TextView[5];
-    private final NavGlyph[] navIcons = new NavGlyph[5];
+    // mkoai 2.0.71: the dock arrays are size 6 — indices 0-4 are the
+    // real tabs, index 5 is the watch-history pseudo-item (a page, not
+    // a tab: it opens historyPage instead of switchTab).
+    private final View[] navTabs = new View[6];
+    private final TextView[] navLabels = new TextView[6];
+    private final NavGlyph[] navIcons = new NavGlyph[6];
     // mkoai 2.0.38: 片庫 is now 收藏 (favorites only).
     private static final String[] TAB_NAMES = {"主頁", "搜尋", "直播", "收藏", "設定"};
-    private static final int[] DOCK_TAB_INDICES = {0, 2, 3, 4};
+    // mkoai 2.0.71: search (1) joins the dock, and watch history (5)
+    // joins as a pseudo-item before settings (4). Order: home, search,
+    // [live], favorites, history, settings.
+    private static final int HISTORY_DOCK_INDEX = 5;
+    private static final String HISTORY_DOCK_LABEL = "觀看記錄";
+    private static final int[] DOCK_TAB_INDICES = {0, 1, 2, 3, 5, 4};
 
     // mkoai 2.0.38: the 直播 tab only exists while a live source is
     // configured. sourcesFor() parses the whole config JSON, so the
@@ -260,7 +272,7 @@ final class MobileShell {
 
     /** Dock tabs for the current state (直播 dropped when no live source exists). */
     private int[] dockTabs() {
-        return hasLiveSources() ? DOCK_TAB_INDICES : new int[] {0, 3, 4};
+        return hasLiveSources() ? DOCK_TAB_INDICES : new int[] {0, 1, 3, 5, 4};
     }
 
     void applyAppearancePreferences() {
@@ -293,15 +305,11 @@ final class MobileShell {
         int topRgb;
         int botRgb;
         int stroke;
-        if (activeTab == 0) {
-            topRgb = HomeTone2066.dockTopRgb(heroDiffusionShown);
-            botRgb = HomeTone2066.dockBottomRgb(heroDiffusionShown);
-            stroke = HomeTone2066.dockStroke(heroDiffusionShown);
-        } else {
-            topRgb = 0x001b2421;
-            botRgb = 0x00111715;
-            stroke = 0x36ffffff;
-        }
+        // mkoai 2.0.71: the dock follows the hero tone on every tab
+        // (was tone on home, fixed dark glass elsewhere).
+        topRgb = HomeTone2066.dockTopRgb(heroDiffusionShown);
+        botRgb = HomeTone2066.dockBottomRgb(heroDiffusionShown);
+        stroke = HomeTone2066.dockStroke(heroDiffusionShown);
         return glassBg(
                 (topAlpha << 24) | topRgb,
                 (botAlpha << 24) | botRgb,
@@ -312,13 +320,15 @@ final class MobileShell {
 
     /** A dock label / glyph colour for the current page tone and selected state. */
     private int dockLabelColor(boolean selected) {
-        int tone = activeTab == 0 ? heroDiffusionShown : HomeRows2061.HOME_SLATE_BG;
+        // mkoai 2.0.71: the dock follows the hero tone on every tab.
+        int tone = heroDiffusionShown;
         return HomeTone2066.dockLabel(tone, selected);
     }
 
     /** The active-tab lens for the current page tone (dark glass on a light pill, white glass otherwise). */
     private GradientDrawable dockLensBg() {
-        int tone = activeTab == 0 ? heroDiffusionShown : HomeRows2061.HOME_SLATE_BG;
+        // mkoai 2.0.71: the dock follows the hero tone on every tab.
+        int tone = heroDiffusionShown;
         return glassBg(
                 HomeTone2066.dockLensTop(tone),
                 HomeTone2066.dockLensBottom(tone),
@@ -329,8 +339,11 @@ final class MobileShell {
 
     /** Re-tints the dock's tabs (lens / labels / glyphs / weight) for the current tone + selection. */
     private void retintDockTabs() {
-        // When on Search tab (1), highlight Home (0) in the 4-tab dock.
-        int highlightedDockTab = activeTab == 1 ? 0 : activeTab;
+        // mkoai 2.0.71: search (1) is in the dock now, so it highlights
+        // itself (the old "search highlights Home" rule is gone).
+        // Watch history (5) is a page, not a tab, so it never highlights:
+        // activeTab is always 0-4, so selected is always false for it.
+        int highlightedDockTab = activeTab;
         int[] dockTabList = dockTabs();
         for (int pos = 0; pos < dockTabList.length; pos++) {
             int i = dockTabList[pos];
@@ -1214,205 +1227,84 @@ final class MobileShell {
         LinearLayout bar = a.row();
         bar.setGravity(Gravity.CENTER_VERTICAL);
 
-        // The tone pill: brand + source in one floating pill (the
-        // Emby Terminus+C pill). Flexible width — it takes what the
-        // circles leave, and the source name truncates inside it.
+        // The brand pill (mkoai 2.0.71): the handwritten "mkoai" image
+        // floats on the poster with NO background — the old tone pill
+        // (brand + source) is gone with the source move. Flexible
+        // width — it takes what the account circle leaves.
         LinearLayout pill = a.row();
         pill.setTag("home-top-pill");
         pill.setGravity(Gravity.CENTER_VERTICAL);
-        pill.setPadding(a.dp(6), 0, a.dp(6), 0);
+        pill.setPadding(a.dp(5), 0, a.dp(5), 0);
         pill.setElevation(a.dp(4));
         homeTopPill = pill;
         homeTopToneBgs.clear();
         homeTopToneTexts.clear();
         homeTopGlyphs.clear();
-        homeTopToneBgs.add(pill);
-        LinearLayout.LayoutParams pillLp = new LinearLayout.LayoutParams(0, a.dp(48), 1f);
-        pillLp.rightMargin = a.dp(6);
+        // mkoai 2.0.71: the pill is NOT added to homeTopToneBgs any
+        // more — the brand image floats on the poster with no pill
+        // background, so retintTopOverlay must not re-paint one onto
+        // it. (The account circle / login pill below still register.)
+        // mkoai 2.0.71: the bar is the pill (+ account) only now, and it
+        // shrinks 48dp -> 40dp tall (5/6); everything inside scales 5/6.
+        LinearLayout.LayoutParams pillLp = new LinearLayout.LayoutParams(0, a.dp(40), 1f);
+        pillLp.rightMargin = a.dp(5);
         bar.addView(pill, pillLp);
 
-        // Left: Brand Logo + Title
+        // Left: Brand — the handwritten "mkoai" image (mkoai 2.0.71,
+        // dancing-rosegold-light: Dancing Script, light rose-gold
+        // #E8B39E taken from the app icon's pink-gold M, shadow baked
+        // in). One ImageView replaces the old logo_mark + "mkoai"
+        // TextView: the cursive already contains the m, so the logo is
+        // redundant. No tint (the rose-gold + baked shadow read on
+        // light and dark pages alike) and no pill background — the image
+        // floats on the poster. Height ~28dp (the old logo's height);
+        // the width follows the image's own ratio (347:132) via
+        // adjustViewBounds.
         LinearLayout brandRow = a.row();
         brandRow.setTag("home-brand");
         brandRow.setGravity(Gravity.CENTER_VERTICAL);
-        ImageView logo = new ImageView(a);
-        logo.setImageResource(R.drawable.logo_mark);
-        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(a.dp(28), a.dp(28));
-        logoLp.rightMargin = a.dp(8);
-        brandRow.addView(logo, logoLp);
-
-        boolean compactBrand =
-                a.windowWidth() < a.dp(360) || a.getResources().getConfiguration().fontScale > 1.2f;
-        TextView brandTitle =
-                a.text(
-                        a.privateMode ? "隱私 · 退出" : compactBrand ? "mkoai" : "mkoai",
-                        compactBrand ? 12 : 14,
-                        Color.WHITE);
-        brandTitle.setTypeface(null, Typeface.BOLD);
-        brandTitle.setSingleLine(!compactBrand);
-        brandTitle.setMaxLines(compactBrand ? 2 : 1);
-        brandTitle.setContentDescription(a.privateMode ? "退出隱私空間" : "mkoai");
-        brandRow.addView(brandTitle);
-        brandRow.setMinimumHeight(a.dp(44));
+        ImageView brandImage = new ImageView(a);
+        brandImage.setImageResource(R.drawable.brand_mkoai_cursive);
+        brandImage.setAdjustViewBounds(true);
+        brandImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        brandImage.setContentDescription("mkoai");
+        brandRow.addView(brandImage, new LinearLayout.LayoutParams(-2, a.dp(28)));
+        brandRow.setMinimumHeight(a.dp(37));
         brandRow.setOnClickListener(
                 v -> {
                     if (a.privateMode) PrivacySpace.switchSpace(a, false);
                     else PrivacySpace.logoTap(a);
                 });
-        homeTopToneTexts.add(brandTitle);
         pill.addView(brandRow, new LinearLayout.LayoutParams(-2, -2));
 
-        // Flexible middle slot: keeps `sitePill` right-aligned and guarantees it shrinks/truncates
-        // before ever pushing `netdiskPill` or `searchCircle` off the right edge of the screen.
-        FrameLayout siteSlot = new FrameLayout(a);
-        LinearLayout.LayoutParams slotLp = new LinearLayout.LayoutParams(0, a.dp(34), 1f);
-        slotLp.leftMargin = a.dp(8);
-        slotLp.rightMargin = a.dp(6);
-        pill.addView(siteSlot, slotLp);
+        // mkoai 2.0.71: the source selector is gone from the pill — it
+        // lives in Settings now (設定 tab -> 「訂閱與賬號」 pane ->
+        // 「切換當前預設片源」 capsule, MobileIosSettings.java:1119-1125:
+        // shows 「當前：」 + current site name and opens chooseSources).
+        // (The same row also exists in MobileShell.populateSettingsBody,
+        // but that method is dead code — only renderLegacySettingsTabUnused
+        // calls it, and nothing calls that — so it is NOT the destination.)
+        // The pill is the brand row only, left-aligned; its width stays
+        // flexible (weight 1f).
 
-        // Right 1: Site selector Liquid Glass capsule (`source-switcher`)
-        String siteLabel = currentSite != null ? currentSite.name + " ▾" : "選擇片源 ▾";
-        TextView sitePill = a.text(siteLabel, 12.5f, Color.WHITE);
-        sitePill.setTag("source-switcher");
-        sitePill.setTypeface(null, Typeface.BOLD);
-        sitePill.setSingleLine(true);
-        sitePill.setEllipsize(TextUtils.TruncateAt.END);
-        int maxSiteWidth = Math.max(a.dp(48), Math.min(a.dp(136), a.windowWidth() - a.dp(250)));
-        sitePill.setMaxWidth(maxSiteWidth);
-        sitePill.setGravity(Gravity.CENTER);
-        sitePill.setPadding(a.dp(11), a.dp(7), a.dp(11), a.dp(7));
-        // mkoai 2.0.66: no own glass background — the pill carries the
-        // tone, the source name is plain text on it (the Emby look).
-        homeTopToneTexts.add(sitePill);
-        // mkoai 2.0.61: green ▶ prefix (reference app top pill). The ▶
-        // span is applied after a.text() creates the view — a.text takes
-        // a plain String, so styled text is set here.
-        android.text.SpannableString pillText =
-                new android.text.SpannableString("▶ " + siteLabel);
-        pillText.setSpan(
-                new android.text.style.ForegroundColorSpan(0xff4ade80),
-                0,
-                1,
-                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        sitePill.setText(pillText);
-        MobileDetailScreen.bindTouchFeedback(sitePill);
-        sitePill.setOnClickListener(
-                v -> {
-                    if (a.config == null) showMobileImportDialog(a);
-                    else a.chooseSources();
-                });
-        siteSlot.addView(
-                sitePill,
-                new FrameLayout.LayoutParams(-2, a.dp(34), Gravity.END | Gravity.CENTER_VERTICAL));
-
-        // Right 3: Circular Search button (`nav-search`) — a floating
-        // round button over the hero now, tone background (2.0.66).
-        FrameLayout searchCircle = new FrameLayout(a);
-        searchCircle.setTag("nav-search");
-        searchCircle.setBackground(topPillBg(heroDiffusionShown));
-        searchCircle.setElevation(a.dp(4));
-        homeTopToneBgs.add(searchCircle);
-        MobileDetailScreen.bindTouchFeedback(searchCircle);
-        searchCircle.setOnClickListener(v -> switchTab(1));
-        NavGlyph searchGlyph = new NavGlyph(a, 1);
-        searchGlyph.setIconTint(0xfff3f4f6);
-        homeTopGlyphs.add(searchGlyph);
-        searchCircle.addView(
-                searchGlyph, new FrameLayout.LayoutParams(a.dp(17), a.dp(17), Gravity.CENTER));
-        searchCircle.setContentDescription("搜尋影片");
-        bar.addView(searchCircle, new LinearLayout.LayoutParams(a.dp(48), a.dp(48)));
-
-        // mkoai 2.0.61: "⋯" menu circle (reference app top bar) — opens
-        // Settings for now (no new menu UI in this first try).
-        FrameLayout moreCircle = new FrameLayout(a);
-        moreCircle.setTag("nav-more");
-        moreCircle.setContentDescription("更多");
-        moreCircle.setBackground(topPillBg(heroDiffusionShown));
-        moreCircle.setElevation(a.dp(4));
-        homeTopToneBgs.add(moreCircle);
-        MobileDetailScreen.bindTouchFeedback(moreCircle);
-        moreCircle.setOnClickListener(v -> switchTab(4));
-        TextView moreGlyph = a.text("⋯", 17, 0xfff3f4f6);
-        homeTopToneTexts.add(moreGlyph);
-        moreGlyph.setGravity(Gravity.CENTER);
-        moreCircle.addView(moreGlyph, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-        LinearLayout.LayoutParams moreLp = new LinearLayout.LayoutParams(a.dp(48), a.dp(48));
-        moreLp.leftMargin = a.dp(6);
-        bar.addView(moreCircle, moreLp);
-
-        // mkoai 2.0.38: history entry, next to search. Opens the full
-        // 觀看歷史 page (same WATCH_HISTORY the home row reads).
-        FrameLayout historyCircle = new FrameLayout(a);
-        historyCircle.setTag("nav-history");
-        historyCircle.setContentDescription("觀看紀錄");
-        historyCircle.setFocusable(true);
-        if (android.os.Build.VERSION.SDK_INT >= 26) historyCircle.setTooltipText("觀看紀錄");
-        historyCircle.setBackground(topPillBg(heroDiffusionShown));
-        historyCircle.setElevation(a.dp(4));
-        homeTopToneBgs.add(historyCircle);
-        MobileDetailScreen.bindTouchFeedback(historyCircle);
-        historyCircle.setOnClickListener(
-                v -> a.open(new MainActivity.Screen(a::historyPage), true));
-        NavGlyph historyGlyph = new NavGlyph(a, 5);
-        historyGlyph.setIconTint(0xfff3f4f6);
-        homeTopGlyphs.add(historyGlyph);
-        historyGlyph.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        historyCircle.addView(
-                historyGlyph, new FrameLayout.LayoutParams(a.dp(25), a.dp(25), Gravity.CENTER));
-        LinearLayout.LayoutParams histLp = new LinearLayout.LayoutParams(a.dp(48), a.dp(48));
-        histLp.leftMargin = a.dp(6);
-        bar.addView(historyCircle, histLp);
+        // mkoai 2.0.71: the search / "···" / history circles are gone
+        // from the top bar — search and history moved to the bottom
+        // dock (search is a real tab now, history a dock pseudo-item
+        // that opens the same historyPage), and "···" only opened
+        // Settings, duplicating the dock. The bar is the pill (+ the
+        // account button, kept — see below) only.
 
         // mkoai: Google account login button (Maoki-style sync). Not signed in: a
         // "登入" pill that opens the Google sign-in browser. Signed in: a circle with
         // the first letter of the email, opening the account sync page.
-        boolean signedIn = SupabaseAuth.isSignedIn(a);
-        if (signedIn) {
-            FrameLayout accountCircle = new FrameLayout(a);
-            accountCircle.setTag("nav-account");
-            accountCircle.setBackground(topPillBg(heroDiffusionShown));
-            accountCircle.setElevation(a.dp(4));
-            homeTopToneBgs.add(accountCircle);
-            MobileDetailScreen.bindTouchFeedback(accountCircle);
-            accountCircle.setOnClickListener(
-                    v ->
-                            a.open(
-                                    new MainActivity.Screen(
-                                            () -> new SettingsScreen(a).accountSync()),
-                                    true));
-            String mail = SupabaseAuth.email(a);
-            String initial =
-                    (mail == null || mail.isEmpty())
-                            ? "G"
-                            : mail.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
-            TextView initialTv = a.text(initial, 15, MainActivity.WHITE);
-            initialTv.setGravity(Gravity.CENTER);
-            homeTopToneTexts.add(initialTv);
-            accountCircle.addView(
-                    initialTv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-            // mkoai 2.0.51: same 48dp circle as the search / history
-            // neighbours — the old 34dp circle looked smaller in the
-            // header. Size only; icon, action and position unchanged.
-            LinearLayout.LayoutParams acLp = new LinearLayout.LayoutParams(a.dp(48), a.dp(48));
-            acLp.leftMargin = a.dp(6);
-            bar.addView(accountCircle, acLp);
-        } else {
-            TextView loginPill = a.text("登入", 13, MainActivity.WHITE);
-            loginPill.setTag("nav-account-login");
-            loginPill.setGravity(Gravity.CENTER);
-            loginPill.setPadding(a.dp(12), 0, a.dp(12), 0);
-            loginPill.setBackground(topPillBg(heroDiffusionShown));
-            loginPill.setElevation(a.dp(4));
-            homeTopToneBgs.add(loginPill);
-            homeTopToneTexts.add(loginPill);
-            MobileDetailScreen.bindTouchFeedback(loginPill);
-            loginPill.setOnClickListener(v -> SupabaseAuth.signInWithGoogle(a));
-            // mkoai 2.0.51: same 48dp height as the neighbouring circles
-            // (was 34dp). Size only; text, action and position unchanged.
-            LinearLayout.LayoutParams lpLp = new LinearLayout.LayoutParams(-2, a.dp(48));
-            lpLp.leftMargin = a.dp(6);
-            bar.addView(loginPill, lpLp);
-        }
+        // mkoai 2.0.71: the account button moved to the Settings Level 1
+        // header (top-right corner) — login lives in Settings now (user
+        // approved a one-time MobileIosSettings edit). The old button
+        // was the only live login entry because the SettingsScreen
+        // 帳號同步 row is unreachable on a phone; the live settings
+        // page (MobileIosSettings) now has its own account button
+        // opening the same accountSync() page, so nothing is lost.
+        // (The top bar keeps only the brand image now.)
 
         homeTopBar = bar;
         // The first paint uses the shown tone (the slate until the first
@@ -1468,7 +1360,9 @@ final class MobileShell {
             ((TextView) v).setTextColor(
                     role == HOME_TEXT_MUTED
                             ? HomeTone2066.mutedText(heroDiffusionShown)
-                            : HomeTone2066.primaryText(heroDiffusionShown));
+                            : role == HOME_TEXT_ACCENT
+                                    ? HomeTone2066.accentText(heroDiffusionShown)
+                                    : HomeTone2066.primaryText(heroDiffusionShown));
         }
     }
 
@@ -1494,10 +1388,78 @@ final class MobileShell {
             ((TextView) v).setTextColor(
                     role == HOME_TEXT_MUTED
                             ? HomeTone2066.mutedText(tone)
-                            : HomeTone2066.primaryText(tone));
+                            : role == HOME_TEXT_ACCENT
+                                    ? HomeTone2066.accentText(tone)
+                                    : HomeTone2066.primaryText(tone));
         }
         homeIsLight = HomeTone2066.isLight(tone);
         homeTextDirty = false;
+    }
+
+    /**
+     * mkoai 2.0.71: re-tints the live settings page for the current page
+     * tone, on demand. The live settings page (MobileIosSettings) is
+     * flat — every title, subtitle, chevron and row label sits directly
+     * on the page background (YouTube-style flat rows, no dark glass
+     * cards) — so white text goes invisible on a light hero unless it
+     * flips with the tone. Called at the end of every settings render
+     * (MobileIosSettings.renderInternal) so a fresh build landing on a
+     * light hero is correct at once, and from the diffusion flip block
+     * so a rotation while sitting on settings re-tints live.
+     */
+    void retintSettingsNow() {
+        if (activeTab != 4) return;
+        retintSettingsText(heroDiffusionShown);
+    }
+
+    private void retintSettingsText(int tone) {
+        if (contentContainer == null) return;
+        retintSettingsTree(contentContainer, tone);
+    }
+
+    /**
+     * mkoai 2.0.71: walks the settings tree and re-tints each TextView
+     * by its current colour (the tone palette is binary —
+     * primaryText/mutedText return one of two constants each — so the
+     * mapping is closed over re-tints): creation whites 0xfff5f5f7 and
+     * tinted 0xffffffff / 0xff111827 are PRIMARY; creation greys
+     * 0xff9ca3af / 0xffd1d5db / 0xffd1d1da / 0xffe5e7eb and tinted
+     * 0xff374151 are MUTED. Coloured texts (private-mode green,
+     * teal slider value) are left alone, the account button subtree
+     * (tagged "settings-account", white on dark glass) is skipped, and
+     * hairline dividers (0x14ffffff) flip to dark hairlines on light
+     * pages (either divider shade maps back on the next flip).
+     */
+    private void retintSettingsTree(ViewGroup parent, int tone) {
+        int primary = HomeTone2066.primaryText(tone);
+        int muted = HomeTone2066.mutedText(tone);
+        int divider = HomeTone2066.isLight(tone) ? 0x14000000 : 0x14ffffff;
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            View v = parent.getChildAt(i);
+            if ("settings-account".equals(v.getTag())) continue;
+            if (v instanceof TextView) {
+                int c = ((TextView) v).getCurrentTextColor();
+                if (c == 0xfff5f5f7 || c == 0xffffffff || c == 0xff111827) {
+                    ((TextView) v).setTextColor(primary);
+                } else if (c == 0xff9ca3af
+                        || c == 0xffd1d5db
+                        || c == 0xffd1d1da
+                        || c == 0xffe5e7eb
+                        || c == 0xff374151) {
+                    ((TextView) v).setTextColor(muted);
+                }
+            }
+            android.graphics.drawable.Drawable bg = v.getBackground();
+            if (bg instanceof android.graphics.drawable.ColorDrawable) {
+                int bc = ((android.graphics.drawable.ColorDrawable) bg).getColor();
+                if (bc == 0x14ffffff || bc == 0x14000000) {
+                    v.setBackground(new android.graphics.drawable.ColorDrawable(divider));
+                }
+            }
+            if (v instanceof ViewGroup) {
+                retintSettingsTree((ViewGroup) v, tone);
+            }
+        }
     }
 
     /** Re-tints the Continue Watching progress tracks for a page tone (prunes detached views). */
@@ -1588,10 +1550,13 @@ final class MobileShell {
                                                         count - 1,
                                                         (int) Math.floor((coord / span) * count)));
                                 int targetTab = dock[slot];
+                                // mkoai 2.0.71: search is a dock tab now,
+                                // so the current slot is just activeTab
+                                // (the old "search counts as home" map is
+                                // gone). History (5) is a slot like any
+                                // other while sliding.
                                 int currentDockTab =
-                                        pendingTab >= 0
-                                                ? pendingTab
-                                                : (activeTab == 1 ? 0 : activeTab);
+                                        pendingTab >= 0 ? pendingTab : activeTab;
                                 if (targetTab != currentDockTab) {
                                     performHapticFeedback(
                                             android.view.HapticFeedbackConstants.KEYBOARD_TAP);
@@ -1603,8 +1568,14 @@ final class MobileShell {
                         if (action == android.view.MotionEvent.ACTION_UP
                                 || action == android.view.MotionEvent.ACTION_CANCEL) {
                             sliding = false;
-                            if (action == android.view.MotionEvent.ACTION_UP && pendingTab >= 0)
-                                switchTab(pendingTab);
+                            if (action == android.view.MotionEvent.ACTION_UP && pendingTab >= 0) {
+                                // mkoai 2.0.71: releasing on the history
+                                // slot opens the history page — it must
+                                // NEVER go through switchTab (which clamps
+                                // 5 to 4 and would open Settings instead).
+                                if (pendingTab == HISTORY_DOCK_INDEX) openHistoryPage();
+                                else switchTab(pendingTab);
+                            }
                             pendingTab = -1;
                             return true;
                         }
@@ -1618,7 +1589,11 @@ final class MobileShell {
         a.glass(bar, 26);
         bar.setElevation(a.dp(18));
 
-        String[] navKeys = {"nav-home", "nav-search", "nav-live", "nav-favorites", "nav-settings"};
+        // mkoai 2.0.71: navKeys is indexed by dock position value, so it
+        // has a 6th entry for the history pseudo-item (tag nav-history,
+        // the same tag the old top-bar circle used).
+        String[] navKeys = {"nav-home", "nav-search", "nav-live", "nav-favorites", "nav-settings",
+                "nav-history"};
         float navScale = Prefs.clampNavScale(a.prefs.getInt(Prefs.NAV_SCALE_PERCENT, 100)) / 100f;
 
         int[] dockTabList = dockTabs();
@@ -1635,13 +1610,23 @@ final class MobileShell {
             tab.addView(
                     glyph, new LinearLayout.LayoutParams(a.dp(22 * navScale), a.dp(22 * navScale)));
 
-            TextView label = a.text(TAB_NAMES[tabIdx], 10.5f * navScale, 0xffe5e7eb);
+            // mkoai 2.0.71: history is not a tab, so its label comes
+            // from its own constant, not TAB_NAMES (which has only
+            // the 5 real tabs). Same NAV_SCALE sizing as the rest.
+            TextView label = a.text(tabIdx == HISTORY_DOCK_INDEX ? HISTORY_DOCK_LABEL : TAB_NAMES[tabIdx],
+                    10.5f * navScale, 0xffe5e7eb);
             label.setGravity(Gravity.CENTER);
             label.setPadding(0, a.dp(2), 0, 0);
             navLabels[tabIdx] = label;
             tab.addView(label, new LinearLayout.LayoutParams(-2, -2));
 
-            tab.setOnClickListener(v -> switchTab(tabIdx));
+            // mkoai 2.0.71: the history item opens the history page;
+            // the real tabs switchTab as before.
+            if (tabIdx == HISTORY_DOCK_INDEX) {
+                tab.setOnClickListener(v -> openHistoryPage());
+            } else {
+                tab.setOnClickListener(v -> switchTab(tabIdx));
+            }
             navTabs[tabIdx] = tab;
 
             LinearLayout.LayoutParams lp =
@@ -1657,7 +1642,25 @@ final class MobileShell {
     private ScrollView homeScroll;
     private LinearLayout homeBody;
 
+    /**
+     * mkoai 2.0.71: open the watch-history page — the same action the
+     * top bar's history circle used to do (now a dock item). A page,
+     * not a tab: it opens on top of the current tab and never changes
+     * activeTab.
+     */
+    private void openHistoryPage() {
+        a.open(new MainActivity.Screen(a::historyPage), true);
+    }
+
     void switchTab(int index) {
+        // mkoai 2.0.71: belt and braces — the history pseudo-index must
+        // NEVER reach the clamp below (5 would become 4 = Settings).
+        // Every caller routes history through openHistoryPage instead,
+        // but if one ever slips, open the history page, not Settings.
+        if (index == HISTORY_DOCK_INDEX) {
+            openHistoryPage();
+            return;
+        }
         ++homeRequest;
         homeReady = false;
         ++a.generation;
@@ -1684,15 +1687,20 @@ final class MobileShell {
         // home re-tints them through applyDiffusionFrame's flip block
         // (the fresh build marks the home text dirty, so the flip runs
         // even when the tone itself is unchanged).
+        // mkoai 2.0.71: leaving home no longer restores the fixed dark
+        // veil — the veil follows the hero tone on every tab now.
         if (nextTab != 0 && homeTopFade != null) {
-            homeTopFade.setBaseColor(HeroDiffusion2063.TOP_FADE_FIXED_RGB);
+            homeTopFade.setBaseColor(heroDiffusionShown);
         }
         // mkoai 2.0.69: the top veil is tall on the home tab (the hero
         // diffusion) and short everywhere else (the status-bar veil).
         updateTopFadeHeight();
         if (nextTab != 0) {
-            if (bottomEdgeFade != null) bottomEdgeFade.setBaseColor(0x060a08);
-            applyStatusBarIcons(false);
+            // mkoai 2.0.71: the bottom veil and the status-bar icons
+            // follow the hero tone on every tab now (was fixed dark +
+            // white icons off-home).
+            if (bottomEdgeFade != null) bottomEdgeFade.setBaseColor(heroDiffusionShown);
+            applyStatusBarIcons(HomeTone2066.isLight(heroDiffusionShown));
             homeTextDirty = true;
         }
         a.cancelPageRequests();
@@ -1719,6 +1727,26 @@ final class MobileShell {
                 });
     }
 
+    /**
+     * mkoai 2.0.71: every tab follows the home hero tone — the page
+     * background is the current heroDiffusionShown on every tab, not
+     * just home. The tab ScrollViews paint no background of their own,
+     * so the root colour shows through. Guarded by the root's current
+     * colour (a no-op when unchanged, and correct after the root is
+     * re-created by render() / renderPage()). The welcome page (no
+     * source/site yet) keeps the near-black root; the detail page sets
+     * the root to its own ambient tone itself, and history re-creates
+     * the root dark in renderPage — neither is touched by this.
+     */
+    private void applyPageTone() {
+        if (a.root == null) return;
+        int want = currentSite != null ? heroDiffusionShown : 0xff141414;
+        android.graphics.drawable.Drawable bg = a.root.getBackground();
+        if (bg instanceof android.graphics.drawable.ColorDrawable
+                && ((android.graphics.drawable.ColorDrawable) bg).getColor() == want) return;
+        a.root.setBackgroundColor(want);
+    }
+
     /** The synchronous per-tab build, run on the next frame by switchTab. */
     private void renderTabNow() {
         switch (activeTab) {
@@ -1738,6 +1766,10 @@ final class MobileShell {
                 renderSettingsTab();
                 break;
         }
+        // mkoai 2.0.71: the freshly built tab shows the current hero
+        // tone at once (the detail page sets the root itself when it
+        // opens, so returning here repaints the tone).
+        applyPageTone();
     }
 
     // =========================================================================
@@ -1863,9 +1895,10 @@ final class MobileShell {
         FrameLayout.LayoutParams badgeLp =
                 new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         // mkoai 2.0.66: the badge sits BELOW the floating top overlay
-        // (status bar + 20dp + 48dp overlay + 10dp), so it never covers
-        // the pill while pulling.
-        badgeLp.topMargin = statusBarHeight() + a.dp(78);
+        // (status bar + 8dp + 40dp overlay + 10dp), so it never covers
+        // the pill while pulling. mkoai 2.0.71: the bar moved back up
+        // and shrank (was + 20dp / 48dp), so the badge follows to + 58dp.
+        badgeLp.topMargin = statusBarHeight() + a.dp(58);
         contentContainer.addView(pullRefreshBadge, badgeLp);
 
         // mkoai 2.0.66: the floating top overlay (Emby style) — one tone
@@ -1878,10 +1911,19 @@ final class MobileShell {
         // bar, so the bar read as cut at the top; at + 20dp the top
         // is ~61dp with ~24dp of daylight, and the bar sits on the
         // top veil's tone field instead of raw art).
+        // mkoai 2.0.71: back to statusBarHeight + 8dp, and the bar
+        // shrinks from 48dp to 40dp tall (user: move the bar up and
+        // make it smaller). The 2.0.68 field test showed the CUT was
+        // the hero art's top edge, not the bar itself — moving the bar
+        // back up does not bring that back. Bar top ~49dp (12dp of
+        // daylight), bar bottom ~89dp, still far above the hero title
+        // (top >= ~300dp, Gravity.BOTTOM-anchored content). The search
+        // / history / "···" circles moved to the dock, so the bar is
+        // the pill (+ the account button) only.
         View topOverlay = buildHomeTopHeaderRow();
         FrameLayout.LayoutParams overlayLp =
                 new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
-        overlayLp.topMargin = statusBarHeight() + a.dp(20);
+        overlayLp.topMargin = statusBarHeight() + a.dp(8);
         overlayLp.leftMargin = a.dp(16);
         overlayLp.rightMargin = a.dp(16);
         contentContainer.addView(topOverlay, overlayLp);
@@ -2932,9 +2974,12 @@ final class MobileShell {
         card.addView(artwork, new FrameLayout.LayoutParams(-1, -1));
         if (homeAmbientView != null) homeAmbientView.follow(artwork);
         // mkoai 2.0.63: hero diffusion scrim — transparent over the top
-        // ~60%, fading into the page colour over the bottom ~40%, so the
+        // ~71%, fading into the page colour over the bottom ~29%, so the
         // hero melts into the rows below with no hard edge and no black
-        // band (was: a scrim ending in solid black).
+        // band (was: a scrim ending in solid black). mkoai 2.0.71: the
+        // fade was pulled back from ~57% (user: the top + bottom fog
+        // is too heavy) — the bottom edge still ends on the opaque
+        // page colour, so there is no seam with the bloom.
         View gradient = new View(a);
         gradient.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 HeroDiffusion2063.scrimColors(heroDiffusionTarget)));
@@ -3240,9 +3285,18 @@ final class MobileShell {
      * (statusBarHeight + 24dp), exactly the 2.0.64-2.0.68 look — those
      * pages have no hero art to melt, and a tall dark veil would wash
      * over their titles.
+     * mkoai 2.0.71: the home veil is pulled back to statusBarHeight
+     * + 150dp (user: the top + bottom fog is too heavy) — same
+     * topFadeColors shape, so on a POCO F5 the veil is ~191dp tall:
+     * opaque to ~27dp, half at ~55dp, transparent from ~82dp. The
+     * status bar's bottom edge still sits on ~82% tone (the opaque
+     * zone covers its top ~27dp), the bar (top ~61dp, bottom ~109dp,
+     * unchanged since 2.0.69) sits on ~38% tone at its top edge and
+     * on clean art below ~82dp — the white pill and circles read on
+     * both — and the art is fully clean below ~82dp.
      */
     private int topFadeHeightPx() {
-        return statusBarHeight() + a.dp(activeTab == 0 ? 250 : 24);
+        return statusBarHeight() + a.dp(activeTab == 0 ? 150 : 24);
     }
 
     /** Resize the top veil for the current tab (no-op when unchanged). */
@@ -3289,15 +3343,23 @@ final class MobileShell {
         if (light != homeIsLight || homeTextDirty) {
             retintTopOverlay(heroDiffusionShown);
             retintHomeText(heroDiffusionShown);
+            // mkoai 2.0.71: the flat live settings page re-tints with the
+            // tone too (retintSettingsText no-ops off the settings tab).
+            retintSettingsText(heroDiffusionShown);
             retintProgressTracks(heroDiffusionShown);
             retintDock();
             applyStatusBarIcons(light);
             if (bottomEdgeFade != null) bottomEdgeFade.setBaseColor(heroDiffusionShown);
             homeIsLight = light;
         }
-        if (homeTopFade != null && activeTab == 0) {
+        // mkoai 2.0.71: the top veil follows the hero tone on every tab
+        // (was home-only; off-home it was a fixed dark band).
+        if (homeTopFade != null) {
             homeTopFade.setBaseColor(heroDiffusionShown);
         }
+        // mkoai 2.0.71: the page background follows the hero tone on
+        // every tab (guarded inside: no-op when unchanged).
+        applyPageTone();
     }
 
     /**
@@ -5409,6 +5471,8 @@ final class MobileShell {
         searchStatus.setEllipsize(TextUtils.TruncateAt.END);
         searchStatus.setPadding(a.dp(4), a.dp(10), a.dp(4), a.dp(6));
         page.addView(searchStatus);
+        // mkoai 2.0.71: the hint sits on the page background — follow the tone.
+        registerHomeText(searchStatus, HOME_TEXT_MUTED);
 
         final HorizontalScrollView siteFilterScroll = new HorizontalScrollView(a);
         siteFilterScroll.setHorizontalScrollBarEnabled(false);
@@ -5741,6 +5805,8 @@ final class MobileShell {
                         hRow.setPadding(a.dp(2), a.dp(10), a.dp(2), a.dp(4));
                         TextView hLabel = a.text("歷史搜尋", 12, MainActivity.MUTED);
                         hRow.addView(hLabel, new LinearLayout.LayoutParams(0, -2, 1));
+                        // mkoai 2.0.71: the section label sits on the page background.
+                        registerHomeText(hLabel, HOME_TEXT_MUTED);
                         TextView clearHist = a.text("清空", 12, 0xffe34b58);
                         MobileDetailScreen.bindTouchFeedback(clearHist);
                         clearHist.setOnClickListener(
@@ -6235,6 +6301,8 @@ final class MobileShell {
         TextView titleView = a.text("電視直播", 22, Color.WHITE);
         titleView.setTypeface(null, Typeface.BOLD);
         titleSearchRow.addView(titleView, new LinearLayout.LayoutParams(0, -2, 1));
+        // mkoai 2.0.71: the page title sits on the page background — follow the tone.
+        registerHomeText(titleView, HOME_TEXT_PRIMARY);
 
         final EditText searchInput = new EditText(a);
         searchInput.setHint("搜尋頻道…");
@@ -6266,6 +6334,8 @@ final class MobileShell {
         final TextView stateView = a.text("正在載入直播頻道…", 13, MainActivity.MUTED);
         stateView.setPadding(a.dp(16), a.dp(16), a.dp(16), a.dp(16));
         page.addView(stateView);
+        // mkoai 2.0.71: the status line sits on the page background — follow the tone.
+        registerHomeText(stateView, HOME_TEXT_MUTED);
 
         // Main Multi-Column Channel Card Grid Area
         ScrollView channelScroll = new ScrollView(a);
@@ -6519,6 +6589,8 @@ final class MobileShell {
             TextView empty = a.text("未找到匹配的直播頻道", 13, MainActivity.MUTED);
             empty.setPadding(a.dp(8), a.dp(24), a.dp(8), a.dp(24));
             channelGridCol.addView(empty);
+            // mkoai 2.0.71: the empty state sits on the page background.
+            registerHomeText(empty, HOME_TEXT_MUTED);
             return;
         }
 
@@ -6702,6 +6774,9 @@ final class MobileShell {
         pageTitle.setTypeface(null, Typeface.BOLD);
         pageTitle.setPadding(0, 0, 0, a.dp(10));
         page.addView(pageTitle);
+        // mkoai 2.0.71: the page title sits on the page background, so
+        // it follows the hero tone like the home titles do.
+        registerHomeText(pageTitle, HOME_TEXT_PRIMARY);
 
         ScrollView sv = new ScrollView(a);
         sv.setFillViewport(true);
@@ -6888,6 +6963,8 @@ final class MobileShell {
             TextView subTitle = a.text(subTitleText, 20, Color.WHITE);
             subTitle.setTypeface(null, Typeface.BOLD);
             topNav.addView(subTitle, new LinearLayout.LayoutParams(0, -2, 1));
+            // mkoai 2.0.71: the sub-page title sits on the page background.
+            registerHomeText(subTitle, HOME_TEXT_PRIMARY);
             body.addView(topNav, new LinearLayout.LayoutParams(-1, -2));
 
             if (settingsSubPage == 1) {
@@ -7208,6 +7285,8 @@ final class MobileShell {
         TextView pageTitle = a.text("設定", 24, Color.WHITE);
         pageTitle.setTypeface(null, Typeface.BOLD);
         body.addView(pageTitle);
+        // mkoai 2.0.71: the page title sits on the page background — follow the tone.
+        registerHomeText(pageTitle, HOME_TEXT_PRIMARY);
 
         a.gap(body, 18);
         final String[] categories = {"片源與直播配置", "播放、解碼與字幕", "介面外觀與偏好", "備份、更新與診斷"};
@@ -7235,6 +7314,9 @@ final class MobileShell {
         h.setTypeface(null, Typeface.BOLD);
         h.setPadding(a.dp(6), a.dp(10), a.dp(6), a.dp(10));
         parent.addView(h);
+        // mkoai 2.0.71: section headers sit on the page background — the
+        // sky blue deepens on a light page (see HomeTone2066.accentText).
+        registerHomeText(h, HOME_TEXT_ACCENT);
     }
 
     interface BooleanAction {
@@ -8462,6 +8544,8 @@ final class MobileShell {
         t.setGravity(Gravity.CENTER);
         t.setPadding(a.dp(20), a.dp(48), a.dp(20), a.dp(48));
         parent.addView(t, new LinearLayout.LayoutParams(-1, -2));
+        // mkoai 2.0.71: hints sit on the page background — follow the tone.
+        registerHomeText(t, HOME_TEXT_MUTED);
     }
 
     /**
@@ -8614,11 +8698,15 @@ final class MobileShell {
     /** Soft top-edge gradient veil so scrolling content dissolves gently under the status bar. */
     private static final class TopEdgeFadeView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        // mkoai 2.0.64: the veil's base colour. Fixed near-black by
-        // default (every tab, and the home before the first hero tone);
-        // on the phone home it follows the hero diffusion tone so the
-        // top bar is not a separate dark band. The alphas/stops never
-        // change — only the base colour varies.
+        // mkoai 2.0.64: the veil's base colour. It starts on the initial
+        // hero tone (the same HOME_SLATE_BG that heroDiffusionShown
+        // starts on, so the first frame already matches the page) and
+        // follows the hero diffusion tone on every tab after that, so
+        // the top bar is not a separate dark band. The alphas/stops
+        // never change — only the base colour varies.
+        // mkoai 2.0.71: the old fixed near-black default is gone — it
+        // flashed a dark band on a light page before the first
+        // setBaseColor landed.
         // mkoai 2.0.69: the gradient is HeroDiffusion2063.topFadeColors
         // (opaque tone through ~14% of the view's height, half at
         // ~29%, transparent from ~43%) and the view is TALL on the
@@ -8628,7 +8716,7 @@ final class MobileShell {
         // of the bottom scrim. The old 3-stop fadeColors veil ended at
         // statusBarHeight + 24dp and left raw art right below it, so
         // the hero still read as a poster pasted on the page.
-        private int baseRgb = HeroDiffusion2063.TOP_FADE_FIXED_RGB;
+        private int baseRgb = HomeRows2061.HOME_SLATE_BG;
 
         // mkoai 2.0.70: the gradient shader is rebuilt only when the
         // base colour or the height changes — the old code allocated a
@@ -8674,12 +8762,15 @@ final class MobileShell {
     /** Soft bottom-edge vignette behind the floating Liquid Glass dock. */
     private static final class BottomEdgeFadeView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        // mkoai 2.0.66: the veil's base colour — fixed near-black by
-        // default (the 2.0.38 look); on the phone home it follows the
-        // page tone, so a light page does not get a dark band painted
-        // across its bottom behind the dock. Same pattern as
+        // mkoai 2.0.66: the veil's base colour — it starts on the
+        // initial hero tone (the same HOME_SLATE_BG that
+        // heroDiffusionShown starts on) and follows the page tone on
+        // every tab after that, so a light page does not get a dark band
+        // painted across its bottom behind the dock. Same pattern as
         // TopEdgeFadeView: only the base colour varies.
-        private int baseRgb = 0x060a08;
+        // mkoai 2.0.71: the old fixed near-black default (0x060a08) is
+        // gone for the same first-frame reason as the top veil.
+        private int baseRgb = HomeRows2061.HOME_SLATE_BG & 0x00ffffff;
 
         // mkoai 2.0.70: same shader cache as TopEdgeFadeView (see above).
         private android.graphics.Shader cachedShader;
