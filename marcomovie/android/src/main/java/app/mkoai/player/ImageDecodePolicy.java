@@ -16,7 +16,12 @@ final class ImageDecodePolicy {
         while (sample <= 16384
                 && width / (sample * 2) >= desiredWidth
                 && height / (sample * 2) >= desiredHeight) sample *= 2;
-        long maxPixels = detail ? 2L * 1024 * 1024 : 800L * 1024;
+        // mkoai 2.0.70: the non-detail cap was 800K pixels, so a 780x1170
+        // TMDB poster decoded at 390x585 and the full-width hero showed
+        // it upscaled ~2.8x (soft). 2M matches detail and still bounds
+        // memory (the image LRU caps the total); small cards are
+        // unaffected — their desired size already picks the same sample.
+        long maxPixels = 2L * 1024 * 1024;
         while (sample <= 16384
                 && (long) Math.max(1, width / sample) * (long) Math.max(1, height / sample)
                         > maxPixels) sample *= 2;

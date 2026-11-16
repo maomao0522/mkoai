@@ -89,6 +89,35 @@ final class ImageLoader {
             return;
         }
         final int ticket = a.generation;
+        // mkoai 2.0.70: a view built before layout reports width 0, so
+        // targetWidth falls back to 320px and the first decode is a
+        // small one. Re-request once laid out, at the real width — the
+        // re-request is a cache hit or joins the in-flight load, and
+        // the completion below never lets the small bitmap clobber the
+        // big one.
+        if (image.getWidth() <= 64 || image.getHeight() <= 64) {
+            final String addr = address;
+            final boolean det = detail;
+            image.addOnLayoutChangeListener(
+                    new android.view.View.OnLayoutChangeListener() {
+                        @Override
+                        public void onLayoutChange(
+                                android.view.View v,
+                                int l,
+                                int t,
+                                int r,
+                                int b,
+                                int ol,
+                                int ot,
+                                int or,
+                                int ob) {
+                            if (v.getWidth() <= 64 || v.getHeight() <= 64) return;
+                            v.removeOnLayoutChangeListener(this);
+                            if (!addr.equals(image.getTag()) || a.isFinishing()) return;
+                            poster(a, addr, image, det);
+                        }
+                    });
+        }
         int initialW = ImageDecodePolicy.targetWidth(image.getWidth(), detail);
         int initialH = ImageDecodePolicy.targetHeight(image.getHeight(), detail);
         boolean initialCrop = image.getScaleType() == ImageView.ScaleType.CENTER_CROP;
@@ -211,6 +240,25 @@ final class ImageLoader {
                                                 for (ImageView target : targets) {
                                                     if (target != null
                                                             && address.equals(target.getTag())) {
+                                                        // mkoai 2.0.70: never let a
+                                                        // smaller decode clobber a sharper
+                                                        // bitmap already showing for this
+                                                        // URL (the layout-time re-request
+                                                        // loads a bigger one; the small
+                                                        // one may finish later).
+                                                        android.graphics.drawable.Drawable cur =
+                                                                target.getDrawable();
+                                                        if (cur instanceof android.graphics.drawable.BitmapDrawable) {
+                                                            Bitmap curBm =
+                                                                    ((android.graphics.drawable.BitmapDrawable) cur)
+                                                                            .getBitmap();
+                                                            if (curBm != null
+                                                                    && !curBm.isRecycled()
+                                                                    && curBm.getWidth() >= bitmap.getWidth()
+                                                                    && curBm.getHeight() >= bitmap.getHeight()) {
+                                                                continue;
+                                                            }
+                                                        }
                                                         // mkoai 2.0.38: network-loaded posters
                                                         // fade in (180ms, hardware-accelerated)
                                                         // instead of popping in. Views with a

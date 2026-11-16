@@ -168,6 +168,14 @@ final class MobileShell {
      * colour. Null until the first diffusion frame paints it.
      */
     private android.graphics.drawable.GradientDrawable heroBloomGradient;
+    // mkoai 2.0.70: the bloom gradient is rebuilt only when the tone
+    // actually changed or the ScrollView is a fresh instance — the old
+    // code allocated a new 8-stop array and called setColors on EVERY
+    // animation frame. The fresh-instance case still repaints (a
+    // rebuilt home gets a new ScrollView painted slate at construction,
+    // and a same-tone early return used to leave it slate).
+    private int lastBloomTone = Integer.MIN_VALUE;
+    private ScrollView lastBloomScroll;
     // mkoai 2.0.64: the phone-home top bar + the top-edge fade follow the
     // hero diffusion too, so the bar is not a separate dark band. The bar
     // is rebuilt on every home render (homeTopBar is re-pointed in
@@ -373,6 +381,9 @@ final class MobileShell {
     static int cachedCatScrollX = 0;
     private int homeRequest;
     private boolean homeReady;
+    // mkoai 2.0.70: view-all grid fill epoch — a newer fill (live
+    // refresh) drops the pending chunks of the older one.
+    private int tmdbGridFillEpoch;
     private Runnable resumeHome;
     Runnable reloadCategory;
     private FrameLayout retainedRoot;
@@ -536,6 +547,9 @@ final class MobileShell {
         refreshHeaderNetdiskCapsule();
         a.root = retainedRoot;
         a.setContentView(retainedRoot);
+        // mkoai 2.0.70: coming back to the retained home fades in
+        // (150ms) instead of hard-cutting back.
+        fadeInView(a, retainedRoot, 150, 0, 0);
         a.watchRootLayout(retainedRoot);
         a.applyMobileSystemBars(false);
         // mkoai 2.0.48: re-kick poster loads on the retained cards.
@@ -577,6 +591,16 @@ final class MobileShell {
         try {
             if (root == null) return;
             if (root instanceof ImageView) {
+                // mkoai 2.0.70: a view that already shows a decoded
+                // bitmap keeps it — only unfinished / poster-less cards
+                // get re-kicked (the old code restarted every load,
+                // decoded or not, after every return home).
+                android.graphics.drawable.Drawable shown = ((ImageView) root).getDrawable();
+                if (shown instanceof android.graphics.drawable.BitmapDrawable) {
+                    Bitmap shownBm =
+                            ((android.graphics.drawable.BitmapDrawable) shown).getBitmap();
+                    if (shownBm != null && !shownBm.isRecycled()) return;
+                }
                 Object tag = root.getTag();
                 if (tag instanceof String) {
                     String t = (String) tag;
@@ -1060,16 +1084,15 @@ final class MobileShell {
         ambientCanvas = new AmbientCanvasView(a);
         a.root.addView(ambientCanvas, new FrameLayout.LayoutParams(-1, -1));
 
-        // mkoai 2.0.38 (Emby style): hero-following ambient background.
-        // Sits above the canvas so the saturated hero wash tints the whole
-        // home; skipped when the user has a custom wallpaper (same rule
-        // as the renderPage ambient).
+        // mkoai 2.0.70: the HomeAmbient layer is gone — the canvas
+        // (Layer 0) already paints the exact same frost field via
+        // HomeAmbient.paintFrost, so the second full-screen layer was
+        // pure overdraw (two identical frost bitmaps stacked). The
+        // HomeAmbient class stays (MainActivity's renderPage ambient
+        // and TV still use it); only this duplicate shell layer is
+        // removed. homeAmbientView stays null and the follow() call
+        // site in buildHeroShowcaseCard is null-guarded.
         homeAmbientView = null;
-        if (a.prefs.getBoolean(Prefs.HOME_AMBIENT, true)
-                && !a.prefs.getBoolean(Prefs.WALLPAPER_ENABLED, false)) {
-            homeAmbientView = new HomeAmbient(a);
-            a.root.addView(homeAmbientView, new FrameLayout.LayoutParams(-1, -1));
-        }
 
         float widthDp = a.windowWidth() / a.getResources().getDisplayMetrics().density;
         boolean tabletSideRail = widthDp >= 640 && !a.isPortrait();
@@ -1652,9 +1675,10 @@ final class MobileShell {
         activeTab = nextTab;
         // mkoai 2.0.64: the top-edge fade is a status-bar veil for every
         // tab — it only carries the hero tone on the home tab. Leaving
-        // home restores the fixed near-black base at once (the tab swap
-        // already changes all content, so no animation is needed here);
-        // coming back home retints it through applyHeroDiffusion.
+        // home restores the fixed near-black base at once; coming back
+        // home retints it through applyHeroDiffusion. The veil and the
+        // dock move now, in the tap; the tab CONTENT fades in on the
+        // next frame (see the deferred renderTabNow below, 2.0.70).
         // mkoai 2.0.66: leaving home also restores the dark dock, the
         // dark bottom veil and the white status-bar icons; coming back
         // home re-tints them through applyDiffusionFrame's flip block
@@ -1674,6 +1698,29 @@ final class MobileShell {
         a.cancelPageRequests();
         retintDock();
         contentContainer.removeAllViews();
+        // mkoai 2.0.70: the tab build runs on the next frame, not inside
+        // the tap — the tap returns at once (the dock + veil above
+        // already moved) and the new tab fades in when its build lands.
+        // The guards drop a stale post: a newer switchTab bumps
+        // homeRequest, a full render replaces mobileHome / the root,
+        // and a finishing activity drops it. Every drop path leaves
+        // visible content behind (the newer tab, the full render, or
+        // the retained root), so a dropped post can never blank the
+        // screen.
+        final int req = homeRequest;
+        a.ui.post(
+                () -> {
+                    if (a.isFinishing() || a.isDestroyed()) return;
+                    if (req != homeRequest) return;
+                    if (a.current == null || a.current.mobileHome != this) return;
+                    if (a.root != retainedRoot) return;
+                    renderTabNow();
+                    fadeInView(a, contentContainer, 180, 16, 0);
+                });
+    }
+
+    /** The synchronous per-tab build, run on the next frame by switchTab. */
+    private void renderTabNow() {
         switch (activeTab) {
             case 0:
                 renderHomeTab();
@@ -1761,10 +1808,17 @@ final class MobileShell {
                                     pullRefreshBadge.setVisibility(View.VISIBLE);
                                     pullRefreshBadge.setAlpha(
                                             Math.min(1f, currentPullOffset / pullThreshold));
-                                    pullRefreshBadge.setText(
+                                    // mkoai 2.0.70: setText on every
+                                    // MOVE event re-measures the badge
+                                    // ~60x/s — only set it when the text
+                                    // actually changes.
+                                    String badgeText =
                                             currentPullOffset >= pullThreshold
                                                     ? "↑ 松开重新整理当前内容"
-                                                    : "↓ 下拉重新整理当前内容");
+                                                    : "↓ 下拉重新整理当前内容";
+                                    if (!badgeText.contentEquals(pullRefreshBadge.getText())) {
+                                        pullRefreshBadge.setText(badgeText);
+                                    }
                                     return true;
                                 }
                             }
@@ -2000,7 +2054,9 @@ final class MobileShell {
                     final HomeScreen.Snapshot cached =
                             siteSnapshot == null ? null : a.homeData.get(siteSnapshot.key);
                     if (catSnapshot.isEmpty() && pageSnapshot == 1 && siteSnapshot != null) {
-                        a.prefs.edit().putString(Prefs.LOADING_SITE, siteSnapshot.key).commit();
+                        // mkoai 2.0.70: apply(), not commit() — a tap must
+                        // never wait on a disk write for a progress flag.
+                        a.prefs.edit().putString(Prefs.LOADING_SITE, siteSnapshot.key).apply();
                     }
                     a.submitPage(
                             () -> {
@@ -2558,7 +2614,9 @@ final class MobileShell {
                                     if (siteSnapshot != null
                                             && siteSnapshot.key.equals(
                                                     a.prefs.getString(Prefs.LOADING_SITE, ""))) {
-                                        a.prefs.edit().putString(Prefs.LOADING_SITE, "").commit();
+                                        // mkoai 2.0.70: apply(), not
+                                        // commit() — same reason as above.
+                                        a.prefs.edit().putString(Prefs.LOADING_SITE, "").apply();
                                     }
                                 }
                             });
@@ -2686,18 +2744,30 @@ final class MobileShell {
                     if (!paused && !touching[0] && isShown() && getGlobalVisibleRect(visible)
                             && (accessibility == null || !accessibility.isTouchExplorationEnabled())) {
                         // mkoai 2.0.63: slow rotation — glide to the next
-                        // card over AUTO_TRANSITION_MS (900ms) instead of
-                        // the default ~250ms snap, so the change is never
-                        // a sudden switch. The manual settle on release
-                        // stays fast (a slow snap would feel laggy).
+                        // card instead of the default ~250ms snap, so the
+                        // change is never a sudden switch. mkoai 2.0.70:
+                        // the glide is 400ms now (was 900ms) — a 900ms
+                        // glide plus the 600ms retint meant every 12s
+                        // the whole home was animating for ~1.5s. The
+                        // manual settle on release stays fast (a slow
+                        // snap would feel laggy).
                         final int fromX = getScrollX();
                         final int toX = ((page[0]+1)%count)*pageWidth;
                         if (autoAnimator != null) autoAnimator.cancel();
                         autoAnimator = ValueAnimator.ofInt(fromX, toX);
-                        autoAnimator.setDuration(HeroSwipe2063.AUTO_TRANSITION_MS);
+                        autoAnimator.setDuration(HERO_AUTO_GLIDE_MS);
                         autoAnimator.setInterpolator(new android.view.animation.DecelerateInterpolator());
                         autoAnimator.addUpdateListener(anim ->
                                 scrollTo((Integer) anim.getAnimatedValue(), 0));
+                        heroAutoGliding = true;
+                        autoAnimator.addListener(new android.animation.AnimatorListenerAdapter() {
+                            @Override public void onAnimationEnd(android.animation.Animator animation) {
+                                heroAutoGliding = false;
+                            }
+                            @Override public void onAnimationCancel(android.animation.Animator animation) {
+                                heroAutoGliding = false;
+                            }
+                        });
                         autoAnimator.start();
                     }
                     postDelayed(this, HeroSwipe2063.AUTO_ADVANCE_MS);
@@ -2841,6 +2911,11 @@ final class MobileShell {
     private View buildHeroShowcaseCard(final Cms.Site site, final Cms.Video featured) {
         FrameLayout card = new FrameLayout(a);
         card.setTag("hero-watch-now-button");
+        // mkoai 2.0.70: press feedback on the hero card — alpha 0.72
+        // the instant the finger lands, instead of silence until the
+        // detail page finishes building. (The hero was the only card
+        // without it.)
+        MobileDetailScreen.bindTouchFeedback(card);
         // mkoai 2.0.67: the height comes from HeroDiffusion2063.heroHeightDp
         // (the same formula the bloom hold uses) — one source of truth,
         // so the card bottom and the bloom anchor can never drift apart.
@@ -3092,10 +3167,12 @@ final class MobileShell {
     }
 
     /**
-     * Smooth 600ms retint of the home background. The tone is applied
-     * through {@link #applyDiffusionFrame()} on every frame (and once
-     * when nothing changes — see below), so the ScrollView, the top bar
-     * and the top-edge fade always move together.
+     * Smooth 300ms retint of the home background (mkoai 2.0.70: was
+     * 600ms — with the 900ms glide the home spent ~1.5s of every 12s
+     * cycle animating). The tone is applied through
+     * {@link #applyDiffusionFrame()} on every frame (and once when
+     * nothing changes — see below), so the ScrollView, the top bar and
+     * the top-edge fade always move together.
      */
     private void animateHeroBackground(int target) {
         if (homeScroll == null) {
@@ -3119,7 +3196,7 @@ final class MobileShell {
             return;
         }
         heroDiffusionAnimator = ValueAnimator.ofArgb(from, target);
-        heroDiffusionAnimator.setDuration(600);
+        heroDiffusionAnimator.setDuration(300);
         heroDiffusionAnimator.addUpdateListener(
                 anim -> {
                     heroDiffusionShown = (int) anim.getAnimatedValue();
@@ -3181,23 +3258,32 @@ final class MobileShell {
 
     private void applyDiffusionFrame() {
         if (homeScroll != null) {
-            if (heroBloomGradient == null) {
-                heroBloomGradient =
-                        new android.graphics.drawable.GradientDrawable(
-                                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                                // mkoai 2.0.65: anchored to the hero's
-                                // bottom edge at rest
-                                // (heroDiffusionHoldFraction) — the tone
-                                // holds until the hero ends, then fades
-                                // outward, so the rest state already looks
-                                // like the scrolled state.
-                                HeroDiffusion2063.bloomColorsAnchored(
-                                        heroDiffusionShown, heroDiffusionHoldFraction));
-            } else {
-                heroBloomGradient.setColors(HeroDiffusion2063.bloomColorsAnchored(
-                        heroDiffusionShown, heroDiffusionHoldFraction));
+            // mkoai 2.0.70: rebuild the bloom only when the tone changed
+            // or the ScrollView is fresh — same-tone frames skip the
+            // array allocation, the setColors and the setBackground.
+            if (heroBloomGradient == null
+                    || heroDiffusionShown != lastBloomTone
+                    || homeScroll != lastBloomScroll) {
+                if (heroBloomGradient == null) {
+                    heroBloomGradient =
+                            new android.graphics.drawable.GradientDrawable(
+                                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                                    // mkoai 2.0.65: anchored to the hero's
+                                    // bottom edge at rest
+                                    // (heroDiffusionHoldFraction) — the tone
+                                    // holds until the hero ends, then fades
+                                    // outward, so the rest state already looks
+                                    // like the scrolled state.
+                                    HeroDiffusion2063.bloomColorsAnchored(
+                                            heroDiffusionShown, heroDiffusionHoldFraction));
+                } else {
+                    heroBloomGradient.setColors(HeroDiffusion2063.bloomColorsAnchored(
+                            heroDiffusionShown, heroDiffusionHoldFraction));
+                }
+                homeScroll.setBackground(heroBloomGradient);
+                lastBloomTone = heroDiffusionShown;
+                lastBloomScroll = homeScroll;
             }
-            homeScroll.setBackground(heroBloomGradient);
         }
         boolean light = HomeTone2066.isLight(heroDiffusionShown);
         if (light != homeIsLight || homeTextDirty) {
@@ -3262,6 +3348,15 @@ final class MobileShell {
     private static final int HERO_TONE_MAX_RETRIES = 24;
 
     /**
+     * mkoai 2.0.70: the auto-advance glide is 400ms now (was the 900ms
+     * HeroSwipe2063.AUTO_TRANSITION_MS — that constant stays in the
+     * forbidden file, the call site just stops using it).
+     */
+    private static final long HERO_AUTO_GLIDE_MS = 400L;
+    /** True while an auto-glide is in flight — tone-sample retries wait it out (see sampleHeroTone). */
+    private boolean heroAutoGliding;
+
+    /**
      * Sample hero page {@code page}'s tone from its already-decoded
      * artwork. The drawable is read on the UI thread; the scale-down +
      * average runs on the artwork pool; the result is applied on the UI
@@ -3278,15 +3373,20 @@ final class MobileShell {
         if (!(d instanceof BitmapDrawable)) {
             // Poster not decoded yet (still the placeholder) — retry
             // shortly; never blocks a tap.
+            // mkoai 2.0.70: a retry that would land mid-glide waits the
+            // glide out (450ms) instead of sampling while the pager is
+            // still sliding.
             if (attempt < HERO_TONE_MAX_RETRIES) {
-                art.postDelayed(() -> sampleHeroTone(page, key, gen, attempt + 1), 500);
+                art.postDelayed(() -> sampleHeroTone(page, key, gen, attempt + 1),
+                        heroAutoGliding ? 450L : 500L);
             }
             return;
         }
         final Bitmap bm = ((BitmapDrawable) d).getBitmap();
         if (bm == null || bm.isRecycled()) {
             if (attempt < HERO_TONE_MAX_RETRIES) {
-                art.postDelayed(() -> sampleHeroTone(page, key, gen, attempt + 1), 500);
+                art.postDelayed(() -> sampleHeroTone(page, key, gen, attempt + 1),
+                        heroAutoGliding ? 450L : 500L);
             }
             return;
         }
@@ -4260,7 +4360,12 @@ final class MobileShell {
                 || tmdbRowsContainerRef == null) return;
         int end = Math.min(start + 2, visible.size());
         for (int i = start; i < end; i++) {
-            tmdbRowsContainerRef.addView(buildTmdbRowSection(site, visible.get(i)));
+            View section = buildTmdbRowSection(site, visible.get(i));
+            tmdbRowsContainerRef.addView(section);
+            // mkoai 2.0.70: the first 3 rows enter with a 150ms fade +
+            // 12dp rise, staggered 30ms — later rows just appear (the
+            // batch already paints 2 per frame).
+            if (i < 3) fadeInView(a, section, 150, 12, i * 30L);
         }
         if (end < visible.size()) {
             tmdbRowsContainerRef.postOnAnimation(() -> renderTmdbRowBatch(site, req, gen, epoch, visible, end));
@@ -4494,8 +4599,28 @@ final class MobileShell {
             LinearLayout listGrid,
             List<Cms.Video> videos,
             int tone) {
+        // mkoai 2.0.70: the grid fills 2 rows per frame (postOnAnimation),
+        // like the TMDB home rows — the old code built every card
+        // synchronously, so opening a long list blocked the tap.
+        final int epoch = ++tmdbGridFillEpoch;
+        final int gen = a.generation;
+        fillTmdbListGridChunk(a, site, listGrid, videos, tone, epoch, gen, 0);
+    }
+
+    private void fillTmdbListGridChunk(
+            MainActivity a,
+            Cms.Site site,
+            LinearLayout listGrid,
+            List<Cms.Video> videos,
+            int tone,
+            int epoch,
+            int gen,
+            int start) {
+        if (epoch != tmdbGridFillEpoch || gen != a.generation || a.isFinishing()) return;
+        if (!listGrid.isAttachedToWindow()) return;
+        int end = Math.min(start + 8, videos.size());
         LinearLayout cards = null;
-        for (int i = 0; i < videos.size(); i++) {
+        for (int i = start; i < end; i++) {
             if (i % 4 == 0) {
                 cards = a.row();
                 cards.setGravity(Gravity.TOP);
@@ -4562,6 +4687,10 @@ final class MobileShell {
                 card.addView(subTv);
             }
             cards.addView(card, lp);
+        }
+        if (end < videos.size()) {
+            listGrid.postOnAnimation(
+                    () -> fillTmdbListGridChunk(a, site, listGrid, videos, tone, epoch, gen, end));
         }
     }
 
@@ -5266,6 +5395,10 @@ final class MobileShell {
 
         topBar.addView(inputRow, new LinearLayout.LayoutParams(0, -2, 1));
         page.addView(topBar, new LinearLayout.LayoutParams(-1, -2));
+        // mkoai 2.0.70: the search box slides in with the page (180ms,
+        // 12dp rise) instead of popping in with the rest. The keyboard
+        // itself is not animated — it follows the input focus as before.
+        fadeInView(a, topBar, 180, 12, 0);
 
         // Search history chips
         final LinearLayout historyWrap = a.vertical();
@@ -5343,6 +5476,9 @@ final class MobileShell {
         final Runnable[] refreshSiteFilterBar = new Runnable[1];
         final Runnable rebuildFilteredResults =
                 () -> {
+                    // mkoai 2.0.70: remember whether the list was empty —
+                    // a first appearance fades in (see below).
+                    final int resultsBefore = resultList.getChildCount();
                     resultList.removeAllViews();
                     List<CachedSearchHit> ordered = new ArrayList<>();
                     for (CachedSearchHit hit : cachedSearchHits) {
@@ -5416,6 +5552,11 @@ final class MobileShell {
                         for (CachedSearchHit hit : ordered) {
                             resultList.addView(buildSearchResultRow(hit.site, hit.video));
                         }
+                    }
+                    // mkoai 2.0.70: first appearance fades in (150ms) —
+                    // later rebuilds (filter taps, live updates) just swap.
+                    if (resultsBefore == 0 && resultList.getChildCount() > 0) {
+                        fadeInView(a, resultList, 150, 0, 0);
                     }
                     renderSearchStatus.run();
                     if (refreshSiteFilterBar[0] != null) refreshSiteFilterBar[0].run();
@@ -7100,6 +7241,36 @@ final class MobileShell {
         void onToggle(boolean checked);
     }
 
+    /**
+     * mkoai 2.0.70: the ONE entrance animation for every navigation —
+     * a 150–250ms fade-in (alpha only, or with a small slide up) on GPU
+     * properties only, so it never triggers layout. Reduced-motion (and
+     * TV, which forces reduced) skips the animation and lands on the
+     * final state at once. Every open() / switchTab() / resume() goes
+     * through this helper — no per-site custom durations.
+     */
+    static void fadeInView(
+            MainActivity a, View v, int durationMs, float slideDp, long startDelayMs) {
+        if (v == null) return;
+        if (a.reduced) {
+            v.setAlpha(1f);
+            v.setTranslationY(0f);
+            return;
+        }
+        v.animate().cancel();
+        v.setAlpha(0f);
+        if (slideDp > 0) v.setTranslationY(a.dp(slideDp));
+        else v.setTranslationY(0f);
+        v.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(durationMs)
+                .setStartDelay(startDelayMs)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .withLayer()
+                .start();
+    }
+
     static void bindCardTouchFeedback(
             MainActivity a,
             View card,
@@ -8298,12 +8469,21 @@ final class MobileShell {
      */
     private static final class AmbientCanvasView extends View {
         private final MainActivity a;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        // mkoai 2.0.70: FILTER_BITMAP_FLAG, like HomeAmbient's own
+        // paint — the canvas now paints the frost alone (the duplicate
+        // HomeAmbient layer is gone), so it must render the stretched
+        // field exactly as smoothly.
+        private final Paint paint =
+                new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint wpPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Rect srcRect = new Rect();
         private final Rect dstRect = new Rect();
         private Bitmap wallpaperBmp;
         private long wallpaperMtime = -1L;
+        // mkoai 2.0.70: a decode already in flight (its file mtime) — a
+        // second reload for the same file is a no-op, not a second decode.
+        private boolean wallpaperDecoding;
+        private long wallpaperDecodeMtime = -1L;
 
         AmbientCanvasView(MainActivity activity) {
             super(activity);
@@ -8327,13 +8507,70 @@ final class MobileShell {
             if (wallpaperBmp != null && !wallpaperBmp.isRecycled() && mtime == wallpaperMtime) {
                 return;
             }
+            if (wallpaperDecoding && mtime == wallpaperDecodeMtime) return;
+            // mkoai 2.0.70: the decode runs on the artwork pool, NOT on
+            // the UI thread — the old code decoded the full-size file
+            // inside the constructor, i.e. inside render(). Until the
+            // decode lands onDraw keeps painting the frost field, then
+            // the completion repaints with the wallpaper.
+            wallpaperDecoding = true;
+            wallpaperDecodeMtime = mtime;
+            final long wantMtime = mtime;
             try {
-                Bitmap decoded = BitmapFactory.decodeFile(wpFile.getAbsolutePath());
-                if (decoded != null) {
-                    wallpaperBmp = decoded;
-                    wallpaperMtime = mtime;
-                }
+                RequestScope.submit(
+                        a.artwork,
+                        () -> {
+                            final Bitmap decoded = decodeWallpaper(wpFile);
+                            a.ui.post(
+                                    () -> {
+                                        wallpaperDecoding = false;
+                                        if (a.isFinishing() || a.isDestroyed()) {
+                                            if (decoded != null && !decoded.isRecycled()) {
+                                                decoded.recycle();
+                                            }
+                                            return;
+                                        }
+                                        File now = new File(a.getFilesDir(), "wallpaper.jpg");
+                                        if (!now.exists() || now.lastModified() != wantMtime) {
+                                            if (decoded != null && !decoded.isRecycled()) {
+                                                decoded.recycle();
+                                            }
+                                            return;
+                                        }
+                                        if (decoded != null) {
+                                            Bitmap old = wallpaperBmp;
+                                            wallpaperBmp = decoded;
+                                            wallpaperMtime = wantMtime;
+                                            if (old != null
+                                                    && old != decoded
+                                                    && !old.isRecycled()) {
+                                                old.recycle();
+                                            }
+                                            invalidate();
+                                        }
+                                    });
+                        });
             } catch (Throwable ignored) {
+                wallpaperDecoding = false;
+            }
+        }
+
+        /** Decode a wallpaper downsampled so its longer side is at most 1920px. */
+        private static Bitmap decodeWallpaper(File wpFile) {
+            try {
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                BitmapFactory.decodeFile(wpFile.getAbsolutePath(), bounds);
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+                int sample = 1;
+                while (Math.max(bounds.outWidth, bounds.outHeight) / (sample * 2) > 1920) {
+                    sample *= 2;
+                }
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inSampleSize = sample;
+                return BitmapFactory.decodeFile(wpFile.getAbsolutePath(), opts);
+            } catch (Throwable ignored) {
+                return null;
             }
         }
 
@@ -8393,6 +8630,13 @@ final class MobileShell {
         // the hero still read as a poster pasted on the page.
         private int baseRgb = HeroDiffusion2063.TOP_FADE_FIXED_RGB;
 
+        // mkoai 2.0.70: the gradient shader is rebuilt only when the
+        // base colour or the height changes — the old code allocated a
+        // new LinearGradient (and a new stops array) on EVERY draw.
+        private android.graphics.Shader cachedShader;
+        private int cachedBaseRgb = Integer.MIN_VALUE;
+        private int cachedH = -1;
+
         TopEdgeFadeView(Context context) {
             super(context);
         }
@@ -8409,15 +8653,20 @@ final class MobileShell {
             int w = getWidth();
             int h = getHeight();
             if (w <= 0 || h <= 0) return;
-            paint.setShader(
-                    new LinearGradient(
-                            0,
-                            0,
-                            0,
-                            h,
-                            HeroDiffusion2063.topFadeColors(baseRgb),
-                            new float[] {0f, 1f / 7, 2f / 7, 3f / 7, 4f / 7, 5f / 7, 6f / 7, 1f},
-                            Shader.TileMode.CLAMP));
+            if (cachedShader == null || cachedBaseRgb != baseRgb || cachedH != h) {
+                cachedShader =
+                        new LinearGradient(
+                                0,
+                                0,
+                                0,
+                                h,
+                                HeroDiffusion2063.topFadeColors(baseRgb),
+                                new float[] {0f, 1f / 7, 2f / 7, 3f / 7, 4f / 7, 5f / 7, 6f / 7, 1f},
+                                Shader.TileMode.CLAMP);
+                cachedBaseRgb = baseRgb;
+                cachedH = h;
+            }
+            paint.setShader(cachedShader);
             canvas.drawRect(0, 0, w, h, paint);
         }
     }
@@ -8431,6 +8680,11 @@ final class MobileShell {
         // across its bottom behind the dock. Same pattern as
         // TopEdgeFadeView: only the base colour varies.
         private int baseRgb = 0x060a08;
+
+        // mkoai 2.0.70: same shader cache as TopEdgeFadeView (see above).
+        private android.graphics.Shader cachedShader;
+        private int cachedBaseRgb = Integer.MIN_VALUE;
+        private int cachedH = -1;
 
         BottomEdgeFadeView(Context context) {
             super(context);
@@ -8449,15 +8703,20 @@ final class MobileShell {
             int w = getWidth();
             int h = getHeight();
             if (w <= 0 || h <= 0) return;
-            paint.setShader(
-                    new LinearGradient(
-                            0,
-                            0,
-                            0,
-                            h,
-                            HomeTone2066.bottomFadeColors(baseRgb),
-                            new float[] {0f, 0.55f, 1f},
-                            Shader.TileMode.CLAMP));
+            if (cachedShader == null || cachedBaseRgb != baseRgb || cachedH != h) {
+                cachedShader =
+                        new LinearGradient(
+                                0,
+                                0,
+                                0,
+                                h,
+                                HomeTone2066.bottomFadeColors(baseRgb),
+                                new float[] {0f, 0.55f, 1f},
+                                Shader.TileMode.CLAMP);
+                cachedBaseRgb = baseRgb;
+                cachedH = h;
+            }
+            paint.setShader(cachedShader);
             canvas.drawRect(0, 0, w, h, paint);
         }
     }

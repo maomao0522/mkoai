@@ -131,8 +131,8 @@ def main():
           "diffusion: hero card sits on the diffusion colour, not a black band")
     check("applyHeroDiffusion(next)" in ms and "applyHeroDiffusion(0)" in ms,
           "diffusion: retint runs on page change and at carousel build")
-    check("ValueAnimator.ofArgb" in ms and "setDuration(600)" in ms,
-          "diffusion: page background animates 600ms on rotation")
+    check("ValueAnimator.ofArgb" in ms and "setDuration(300)" in ms,
+          "diffusion: page background animates 300ms on rotation (2.0.70: was 600ms)")
     check("RequestScope.submit(a.artwork" in ms,
           "diffusion: sampling runs on the artwork pool, off the UI thread")
     check("instanceof BitmapDrawable" in ms,
@@ -168,9 +168,9 @@ def main():
           and "HeroSwipe2063.shouldPauseAutoAdvance(" in ms,
           "swipe: auto-advance pauses 24s after a manual swipe, 12s after a tap")
     check("ValueAnimator.ofInt(fromX, toX)" in ms
-          and "HeroSwipe2063.AUTO_TRANSITION_MS" in ms
+          and "HERO_AUTO_GLIDE_MS = 400L" in ms
           and "DecelerateInterpolator" in ms,
-          "swipe: auto-advance glides over 900ms (slow), not a ~250ms snap")
+          "swipe: auto-advance glides over 400ms (2.0.70: MobileShell's own constant, not the 900ms one), not a ~250ms snap")
     check("autoAnimator.cancel()" in ms,
           "swipe: a touch down stops a slow auto-glide in flight")
     check("heroSwipeDragged" in ms and "if (heroSwipeDragged) return;" in ms,
@@ -292,13 +292,13 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.69"' in ev and "20070" in ev, "edition-versions.json = 2.0.69 / 20070")
+    check('"2.0.70"' in ev and "20071" in ev, "edition-versions.json = 2.0.70 / 20071")
     lite = json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.69"' in man and 'android:versionCode="20070"' in man,
-          "AndroidManifest.xml = 2.0.69 / 20070")
+    check('android:versionName="2.0.70"' in man and 'android:versionCode="20071"' in man,
+          "AndroidManifest.xml = 2.0.70 / 20071")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

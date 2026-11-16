@@ -265,7 +265,9 @@ public final class MainActivity extends Activity {
                         AppLog.w("PluginGuard", "extension main-thread callback failed", error);
                         MainActivity activity = activeActivity;
                         if (activity != null && activity.prefs != null) {
-                            activity.prefs.edit().putString(Prefs.LOADING_SITE, "").commit();
+                            // mkoai 2.0.70: apply(), not commit() — a tap
+                            // must never wait on a disk write for a flag.
+                            activity.prefs.edit().putString(Prefs.LOADING_SITE, "").apply();
                             activity.ui.post(
                                     () -> {
                                         if (!activity.isFinishing()) activity.toast("擴充套件操作未能完成，請重試");
@@ -1334,6 +1336,12 @@ public final class MainActivity extends Activity {
         if (history && current != null) back.push(current);
         current = s;
         s.render.run();
+        // mkoai 2.0.70: every navigation fades in (200ms, 24dp rise)
+        // instead of hard-cutting — the tap itself already got its
+        // instant press feedback, this masks the pop-in of the new page.
+        if (!isTvDevice() && !reduced && root != null) {
+            MobileShell.fadeInView(this, root, 200, 24, 0);
+        }
         restore(s);
     }
 
@@ -1388,6 +1396,11 @@ public final class MainActivity extends Activity {
         if (!isTvDevice() && screen.mobileHome != null && screen.mobileHome.resume()) return;
         if (isTvDevice() && screen.retainedHome != null && screen.retainedHome.resume()) return;
         screen.render.run();
+        // mkoai 2.0.70: coming back fades in (180ms, no slide — it is a
+        // return, not an entrance). resume() above fades on its own path.
+        if (!isTvDevice() && !reduced && root != null) {
+            MobileShell.fadeInView(this, root, 180, 0, 0);
+        }
     }
 
     @Override
