@@ -216,23 +216,23 @@ public class Home2058Checks {
         List<Cms.Video> simkl = new ArrayList<>();
         simkl.add(v("msearch:Simkl片", "Simkl片"));
 
-        List<Cms.Video> c1 = HomeScreen.composeHomeVideos(douban, source, simkl);
+        List<Cms.Video> c1 = HomeScreen.composeHomeVideos(douban, source, simkl, "", "");
         eq(
                 titles(c1).toString(),
                 "[新片A, 新片B, 來源片1, 來源片2]",
                 "compose: Douban 新片 first, then the source (Simkl NOT used)");
-        List<Cms.Video> c2 = HomeScreen.composeHomeVideos(douban, new ArrayList<Cms.Video>(), simkl);
+        List<Cms.Video> c2 = HomeScreen.composeHomeVideos(douban, new ArrayList<Cms.Video>(), simkl, "", "");
         eq(
                 titles(c2).toString(),
                 "[新片A, 新片B, Simkl片]",
                 "compose: empty source -> Simkl as fallback after Douban 新片");
-        List<Cms.Video> c3 = HomeScreen.composeHomeVideos(null, null, simkl);
+        List<Cms.Video> c3 = HomeScreen.composeHomeVideos(null, null, simkl, "", "");
         eq(titles(c3).toString(), "[Simkl片]", "compose: Simkl alone when nothing else");
-        eq(HomeScreen.composeHomeVideos(null, null, null).size(), 0, "compose: all null -> empty");
+        eq(HomeScreen.composeHomeVideos(null, null, null, "", "").size(), 0, "compose: all null -> empty");
         List<Cms.Video> dup = new ArrayList<>();
         dup.add(v("msearch:新片A", "新片A"));
         eq(
-                HomeScreen.composeHomeVideos(douban, dup, null).size(),
+                HomeScreen.composeHomeVideos(douban, dup, null, "", "").size(),
                 2,
                 "compose: same id in Douban + source is deduped");
         List<Cms.Video> junk = new ArrayList<>();
@@ -243,7 +243,7 @@ public class Home2058Checks {
         junk.add(emptyId);
         junk.add(v("s9", "有效"));
         eq(
-                HomeScreen.composeHomeVideos(null, junk, null).size(),
+                HomeScreen.composeHomeVideos(null, junk, null, "", "").size(),
                 1,
                 "compose: null and empty-id videos are dropped");
     }

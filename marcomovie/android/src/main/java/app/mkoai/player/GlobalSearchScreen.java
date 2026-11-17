@@ -1298,6 +1298,7 @@ public final class GlobalSearchScreen implements AutoCloseable {
             hint.setLineSpacing(a.dp(6), 1);
             hint.setPadding(0, a.dp(18), 0, 0);
             resultBody.addView(hint);
+            renderRecommendSettings();
             ensureHotSearches();
             return;
         }
@@ -1322,7 +1323,75 @@ public final class GlobalSearchScreen implements AutoCloseable {
                             showHistory();
                         });
         a.addButton(resultBody, clear);
+        renderRecommendSettings();
         ensureHotSearches();
+    }
+
+    // mkoai 2.0.76: 推薦優先地區 — two rows (劇 / 電影）, one region
+    // pick each, below 最近搜尋 (one UI for phone + TV, on the empty
+    // search page). A tap saves the pick in Prefs (local per device)
+    // and re-renders this section; the pick is applied to the 推薦 grid
+    // on the phone (MobileShell.renderHomeSections) and the TV
+    // (HomeScreen.composeHomeVideos). 不限 = current behaviour.
+    void renderRecommendSettings() {
+        TextView title = a.text("推薦設定", 16, MainActivity.WHITE);
+        title.setTypeface(null, Typeface.BOLD);
+        title.setPadding(0, a.dp(18), 0, a.dp(4));
+        resultBody.addView(title);
+        renderRecommendRow("劇優先地區", Prefs.RECOMMEND_DRAMA_REGION);
+        renderRecommendRow("電影優先地區", Prefs.RECOMMEND_MOVIE_REGION);
+    }
+
+    void renderRecommendRow(String label, String prefKey) {
+        LinearLayout row = a.row();
+        TextView name = a.text(label, 14, 0xffc2cbd7);
+        name.setPadding(0, 0, a.dp(10), 0);
+        name.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(name, new LinearLayout.LayoutParams(-2, a.dp(34)));
+        String current = a.prefs.getString(prefKey, "");
+        for (int i = 0; i < RecommendRegion2076.REGION_CODES.length; i++) {
+            final String code = RecommendRegion2076.REGION_CODES[i];
+            Button b =
+                    a.button(
+                            RecommendRegion2076.REGION_LABELS[i],
+                            "search-recommend:" + prefKey + ":" + code,
+                            () -> {
+                                a.prefs.edit().putString(prefKey, code).apply();
+                                showHistory();
+                            });
+            b.setTextSize(12);
+            b.setMinWidth(a.dp(56));
+            b.setMinimumWidth(a.dp(56));
+            b.setMinHeight(0);
+            b.setMinimumHeight(0);
+            b.setPadding(a.dp(12), 0, a.dp(12), 0);
+            b.setSingleLine(true);
+            b.setGravity(Gravity.CENTER);
+            b.setContentDescription(label + RecommendRegion2076.labelFor(code));
+            b.setOnFocusChangeListener(
+                    (v, focus) -> styleRecommendPill(b, code.equals(current), focus));
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-2, a.dp(34));
+            size.setMargins(a.dp(2), 0, a.dp(6), 0);
+            row.addView(b, size);
+            styleRecommendPill(b, code.equals(current), false);
+        }
+        resultBody.addView(row);
+    }
+
+    void styleRecommendPill(Button b, boolean selected, boolean focused) {
+        b.setSelected(selected);
+        b.setTypeface(null, selected ? Typeface.BOLD : Typeface.NORMAL);
+        FocusMotion.style(
+                a,
+                b,
+                focused,
+                selected ? 0xff465c76 : 0xff272f3a,
+                MainActivity.WHITE,
+                17,
+                selected ? MainActivity.WHITE : 0xffc2cbd7,
+                MainActivity.DARK,
+                true,
+                1.035f);
     }
 
     // mkoai (item 5): "熱門搜尋" section on the empty search page.

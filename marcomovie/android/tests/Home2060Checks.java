@@ -306,7 +306,7 @@ public class Home2060Checks {
         // ---- 5. composeHomeVideos Douban-first order preserved ----
         List<Cms.Video> douban = Arrays.asList(video("d1", "豆瓣新片甲"), video("d2", "豆瓣新片乙"));
         List<Cms.Video> composed =
-                HomeScreen.composeHomeVideos(douban, merged, null);
+                HomeScreen.composeHomeVideos(douban, merged, null, "", "");
         check(!composed.isEmpty() && "豆瓣新片甲".equals(composed.get(0).title),
                 "compose: Douban 新片 still lead the merged home");
         check(composed.size() >= 2, "compose: merged source videos follow Douban");

@@ -749,7 +749,9 @@ final class HomeScreen {
     static List<Cms.Video> composeHomeVideos(
             List<Cms.Video> doubanNew,
             List<Cms.Video> sourceVideos,
-            List<Cms.Video> simklHot) {
+            List<Cms.Video> simklHot,
+            String dramaRegion,
+            String movieRegion) {
         List<Cms.Video> out = new ArrayList<>();
         // 2.0.61 (h): the 推薦 grid shows only movies and dramas/series.
         // Douban 新片 are movies (their tag classifies them as such); the
@@ -766,7 +768,9 @@ final class HomeScreen {
             body = VideoKind2061.filterRecommendations(simklHot);
         if (body != null) out.addAll(body);
         clean(out);
-        return out;
+        // mkoai 2.0.76: 推薦優先地區 — a stable reorder only (never a
+        // filter); blank picks leave the order unchanged.
+        return RecommendRegion2076.reorder(out, dramaRegion, movieRegion);
     }
 
     /**
@@ -790,7 +794,14 @@ final class HomeScreen {
                     if (!active() || token != request) return;
                     snapshot =
                             new Snapshot(
-                                    composeHomeVideos(douban, new ArrayList<>(), null),
+                                    composeHomeVideos(
+                                            douban,
+                                            new ArrayList<>(),
+                                            null,
+                                            a.prefs.getString(
+                                                    Prefs.RECOMMEND_DRAMA_REGION, ""),
+                                            a.prefs.getString(
+                                                    Prefs.RECOMMEND_MOVIE_REGION, "")),
                                     new ArrayList<>(),
                                     "",
                                     1);
@@ -858,7 +869,16 @@ final class HomeScreen {
                                         if (!active() || token != request) return;
                                         snapshot =
                                                 new Snapshot(
-                                                        composeHomeVideos(douban, painted, null),
+                                                        composeHomeVideos(
+                                                                douban,
+                                                                painted,
+                                                                null,
+                                                                a.prefs.getString(
+                                                                        Prefs.RECOMMEND_DRAMA_REGION,
+                                                                        ""),
+                                                                a.prefs.getString(
+                                                                        Prefs.RECOMMEND_MOVIE_REGION,
+                                                                        "")),
                                                         new ArrayList<>(),
                                                         "",
                                                         1);
@@ -890,7 +910,13 @@ final class HomeScreen {
                 }
             }
         }
-        final List<Cms.Video> composed = composeHomeVideos(doubanNew, body, simklHot);
+        final List<Cms.Video> composed =
+                composeHomeVideos(
+                        doubanNew,
+                        body,
+                        simklHot,
+                        a.prefs.getString(Prefs.RECOMMEND_DRAMA_REGION, ""),
+                        a.prefs.getString(Prefs.RECOMMEND_MOVIE_REGION, ""));
         final boolean hasDoubanNew = doubanNew != null && !doubanNew.isEmpty();
         final List<Cms.Video> finalSimklHot = simklHot;
         if (!a.reduced) {
@@ -1030,7 +1056,14 @@ final class HomeScreen {
                             }
                             if (simklHot != null) {
                                 final List<Cms.Video> composed =
-                                        composeHomeVideos(doubanNew, null, simklHot);
+                                        composeHomeVideos(
+                                                doubanNew,
+                                                null,
+                                                simklHot,
+                                                a.prefs.getString(
+                                                        Prefs.RECOMMEND_DRAMA_REGION, ""),
+                                                a.prefs.getString(
+                                                        Prefs.RECOMMEND_MOVIE_REGION, ""));
                                 final boolean hasDoubanNew = doubanNew != null;
                                 RequestScope.checkCurrent();
                                 a.ui.post(
@@ -1075,7 +1108,14 @@ final class HomeScreen {
                         // 2.0.58: the home follows the selected source —
                         // Douban 新片 first, then this source's own videos.
                         List<Cms.Video> composed =
-                                composeHomeVideos(doubanNew, list.videos, null);
+                                composeHomeVideos(
+                                        doubanNew,
+                                        list.videos,
+                                        null,
+                                        a.prefs.getString(
+                                                Prefs.RECOMMEND_DRAMA_REGION, ""),
+                                        a.prefs.getString(
+                                                Prefs.RECOMMEND_MOVIE_REGION, ""));
                         Snapshot result =
                                 new Snapshot(composed, categories, skip, list.pageCount);
                         RequestScope.checkCurrent();

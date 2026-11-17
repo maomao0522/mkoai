@@ -3586,6 +3586,14 @@ final class MobileShell {
         videos = HomeYear2066.filterRecommendations(videos,
                 v -> v == null ? -1 : HomeYear2066.parseYear(v.year),
                 HomeYear2066.currentYear());
+        // mkoai 2.0.76: 推薦優先地區 — a stable reorder only (never a
+        // filter); blank picks leave the order unchanged. The picks are
+        // set on the search page below 最近搜尋 (local per device).
+        videos =
+                RecommendRegion2076.reorder(
+                        videos,
+                        a.prefs.getString(Prefs.RECOMMEND_DRAMA_REGION, ""),
+                        a.prefs.getString(Prefs.RECOMMEND_MOVIE_REGION, ""));
         // mkoai 2.0.51: never show the "no recommendations" copy while
         // the TMDB checks are still running or their rows are visible —
         // the rows below are still filling in (or already showing

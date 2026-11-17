@@ -98,6 +98,14 @@ final class Prefs {
      * it follows youth mode unless the user turns it off separately;
      * youth mode OFF → this switch has no effect. */
     static final String HIDE_LUNLI = "hide_lunli";
+    /** mkoai 2.0.76: 推薦優先地區 — one region pick for dramas (劇）
+     * and one for movies (電影）, set on the search page below 最近搜尋
+     * (one UI for phone + TV; see RecommendRegion2076). Values are
+     * region codes ("" = 不限， "TW" / "CN" / "KR" / "JP" / "US").
+     * Local only — deliberately NOT in KEYS or SYNC_SETTING_KEYS
+     * (per-device, like HIDE_LUNLI). */
+    static final String RECOMMEND_DRAMA_REGION = "recommend_drama_region";
+    static final String RECOMMEND_MOVIE_REGION = "recommend_movie_region";
     static final String HOME_SOURCE = "home_source";
     static final String LOADING_SITE = "loading_site";
     static final String EXPERIMENTAL_CSP = "experimental_csp";

@@ -149,6 +149,7 @@ final class AwwratedHome {
     private static final String REGION_TW = "TW";
     private static final String REGION_CN = "CN";
     private static final String REGION_KR = "KR";
+    private static final String REGION_JP = "JP";
     private static final String REGION_US = "US";
     private static final String REGION_OTHER = "OTHER";
     static final String REGION_UNKNOWN = "UNKNOWN";
@@ -1905,12 +1906,14 @@ final class AwwratedHome {
         if (a.contains("台湾")) return REGION_TW;
         if (a.contains("大陆") || a.contains("中国") || a.contains("香港")) return REGION_CN;
         if (a.contains("韩国")) return REGION_KR;
+        if (a.contains("日本")) return REGION_JP;
         if (a.contains("美国")) return REGION_US;
         String upper = a.toUpperCase(java.util.Locale.ROOT);
         for (String token : upper.split("[,、/;|]+")) {
             if ("TW".equals(token)) return REGION_TW;
             if ("CN".equals(token)) return REGION_CN;
             if ("KR".equals(token)) return REGION_KR;
+            if ("JP".equals(token)) return REGION_JP;
             if ("US".equals(token)) return REGION_US;
         }
         return REGION_OTHER;
