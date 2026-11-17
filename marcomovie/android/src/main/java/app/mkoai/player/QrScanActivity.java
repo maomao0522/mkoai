@@ -115,6 +115,17 @@ public class QrScanActivity extends Activity
 
     private void startCamera() {
         if (camera != null) return;
+        // 2.0.75: the preview surface does not exist yet when onCreate runs
+        // (it is created asynchronously after setContentView). Opening the
+        // camera and calling setPreviewDisplay on the not-yet-created
+        // surface starts a preview that renders nowhere — a black screen —
+        // and surfaceCreated used to skip the re-attach because camera was
+        // already non-null. Wait for the surface instead; surfaceCreated
+        // calls startCamera() again once it exists.
+        if (preview.getHolder().getSurface() == null
+                || !preview.getHolder().getSurface().isValid()) {
+            return;
+        }
         try {
             camera = Camera.open();
             Camera.Parameters params = camera.getParameters();
@@ -149,10 +160,29 @@ public class QrScanActivity extends Activity
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        if (camera == null
-                && checkSelfPermission(android.Manifest.permission.CAMERA)
-                        == PackageManager.PERMISSION_GRANTED) {
+        if (checkSelfPermission(android.Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        if (camera == null) {
             startCamera();
+            return;
+        }
+        // 2.0.75: the camera was already opened (e.g. onCreate raced ahead
+        // of the surface, or the surface was recreated). The preview display
+        // was attached to the old / not-yet-created surface, so re-attach it
+        // to this holder or the preview stays black.
+        try {
+            camera.stopPreview();
+        } catch (Exception ignored) {
+        }
+        try {
+            camera.setPreviewDisplay(holder);
+            camera.startPreview();
+        } catch (Exception e) {
+            Toast.makeText(this, "無法開啟相機，可改用手動輸入", Toast.LENGTH_LONG).show();
+            releaseCamera();
+            finish();
         }
     }
 
