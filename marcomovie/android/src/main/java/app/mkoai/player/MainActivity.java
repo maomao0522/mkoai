@@ -689,6 +689,8 @@ public final class MainActivity extends Activity {
                         }
                     });
             handleSupabaseCallback(getIntent());
+            // 2.0.77: a Google TV Continue Watching tap that launched the app.
+            handleWatchNext(getIntent());
             SupabaseSync.downloadOnStart(this);
         }
         reduced = prefs.getBoolean(Prefs.REDUCED, false);
@@ -2176,6 +2178,7 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (!privateMode) handleSupabaseCallback(intent);
+        if (!privateMode) handleWatchNext(intent);
     }
 
     /** Handle the Supabase Google sign-in callback (mkoai://login-callback). */
@@ -2194,6 +2197,37 @@ public final class MainActivity extends Activity {
         }
     }
 
+    /**
+     * 2.0.77: handle a Google TV Continue Watching tap
+     * (mkoai://watch-next?key=...). The key is the history entry's key;
+     * the entry is resumed through the same path as the in-app Continue
+     * Watching row. A missing entry (deleted / cleared since the card was
+     * published) just toasts instead of opening a blank page.
+     */
+    void handleWatchNext(android.content.Intent intent) {
+        if (intent == null || intent.getData() == null) return;
+        android.net.Uri data = intent.getData();
+        if (!WatchNext2077.SCHEME.equals(data.getScheme())
+                || !WatchNext2077.HOST.equals(data.getHost())) {
+            return;
+        }
+        String key = data.getQueryParameter("key");
+        if (key == null || key.isEmpty()) return;
+        WatchHistory.Entry found = null;
+        for (WatchHistory.Entry e :
+                WatchHistory.read(prefs.getString(Prefs.WATCH_HISTORY, "[]"))) {
+            if (key.equals(e.key())) {
+                found = e;
+                break;
+            }
+        }
+        if (found == null) {
+            toast("找不到這部片的記錄");
+            return;
+        }
+        resumeHistory(found);
+    }
+
     protected void onResume() {
         super.onResume();
         activeActivity = this;
@@ -2206,6 +2240,9 @@ public final class MainActivity extends Activity {
         // mkoai 2.0.43: 回到前景自動下拉合併（SupabaseSync 內 60 秒節流；播放中不拉，
         // 免得寫入歷史打斷播放）。App 啟動下載與手動「立即同步」不受影響。
         if (!privateMode && !playing) SupabaseSync.downloadOnResume(this);
+        // 2.0.77: heal the TV launcher row from stored history (phone-synced
+        // progress shows up too); throttled inside, TV-only, fail-soft.
+        WatchNext2077.reconcileIfDue(this);
     }
 
     @Override

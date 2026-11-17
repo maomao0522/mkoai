@@ -111,6 +111,8 @@ final class SupabaseSync {
             SupabaseAuth.prefs(c).edit().putLong(clearKey(c), mark)
                     .putBoolean(clearKey(c) + "_pending", true).remove(Prefs.WATCH_HISTORY).apply();
         }
+        // 2.0.77: clearing the whole history takes the TV launcher cards too.
+        WatchNext2077.removeAll(c);
         scheduleUpload(c);
     }
     private static void flushHistoryClear(Context c, String uid) throws Exception {

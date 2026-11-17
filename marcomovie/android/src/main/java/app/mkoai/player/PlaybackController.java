@@ -1973,6 +1973,8 @@ final class PlaybackController {
                                     a.playingBookmark))
                     .commit();
             a.lastBookmarkSave = a.playingBookmark.updated;
+            // 2.0.77: first publish of the TV launcher card (playback just opened).
+            WatchNext2077.publishOrRemove(a, a.playingBookmark);
         } catch (Exception error) {
             AppLog.w("PlaybackController", "savePlaybackHistoryOnPrepared failed", error);
         }
@@ -2018,6 +2020,9 @@ final class PlaybackController {
                                     a.playingBookmark))
                     .commit();
             a.lastBookmarkSave = now;
+            // 2.0.77: forced saves (pause / stop / episode change) refresh the
+            // TV launcher card; the 2s periodic saves leave it alone.
+            if (force) WatchNext2077.publishOrRemove(a, a.playingBookmark);
         } catch (Exception error) {
             AppLog.w("PlaybackController", "savePlaybackHistory failed", error);
         }

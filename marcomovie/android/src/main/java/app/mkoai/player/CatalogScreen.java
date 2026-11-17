@@ -464,6 +464,8 @@ final class CatalogScreen {
                                                                 Prefs.WATCH_HISTORY, "[]"),
                                                         e.key()))
                                         .apply();
+                                // 2.0.77: the TV launcher card goes away with the record.
+                                WatchNext2077.remove(a, e);
                                 a.refresh();
                             }
                         })
