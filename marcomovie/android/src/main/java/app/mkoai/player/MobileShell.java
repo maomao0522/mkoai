@@ -6930,6 +6930,12 @@ final class MobileShell {
         }
     }
 
+    /** mkoai 2.0.74: after a source edit (delete / reorder / delete-all) the Settings page must follow the new current source without navigating away. Re-resolve the active site from prefs (the deleted source is gone from config.sites, so the fallback wins; null when no source is left) and re-render the Settings tab in place — no root replacement, so an open picker keeps a laid-out root and the Settings sub-page stays where the user left it. No-op unless on the Settings tab. */
+    void refreshSettingsAfterSourceEdit() {
+        resolveActiveSite();
+        refreshSettingsPage(0);
+    }
+
     @SuppressWarnings("unused")
     private void renderLegacySettingsTabUnused() {
         contentContainer.removeAllViews();

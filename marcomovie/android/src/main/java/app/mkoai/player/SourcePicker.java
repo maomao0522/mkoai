@@ -30,20 +30,70 @@ final class SourcePicker {
                     new org.json.JSONObject(a.prefs.getString(currentProfile, "{}"));
             org.json.JSONArray order = saved.optJSONArray("order"),
                     removed = saved.optJSONArray("removed");
-            java.util.Map<String, Cms.Site> byKey = new java.util.LinkedHashMap<>();
-            for (Cms.Site site : config.sites) byKey.put(site.key, site);
-            if (removed != null)
-                for (int i = 0; i < removed.length(); i++) byKey.remove(removed.optString(i));
+            java.util.List<Cms.Site> filtered =
+                    applyProfileToSites(new java.util.ArrayList<>(config.sites), order, removed);
             config.sites.clear();
-            if (order != null)
-                for (int i = 0; i < order.length(); i++) {
-                    Cms.Site site = byKey.remove(order.optString(i));
-                    if (site != null) config.sites.add(site);
-                }
-            config.sites.addAll(byKey.values());
+            config.sites.addAll(filtered);
         } catch (org.json.JSONException ignored) {
             /* Keep the imported order. */
         }
+    }
+
+    /** mkoai 2.0.74: apply an order/removed profile to a site list — the pure half of applyEdits, so the JVM tests can pin the delete → reload round-trip. Removed keys drop out; ordered keys come first in order; anything left keeps its imported order. */
+    static java.util.List<Cms.Site> applyProfileToSites(
+            java.util.List<Cms.Site> sites,
+            org.json.JSONArray order,
+            org.json.JSONArray removed) {
+        java.util.Map<String, Cms.Site> byKey = new java.util.LinkedHashMap<>();
+        for (Cms.Site s : sites) byKey.put(s.key, s);
+        if (removed != null)
+            for (int i = 0; i < removed.length(); i++) byKey.remove(removed.optString(i));
+        java.util.List<Cms.Site> out = new java.util.ArrayList<>();
+        if (order != null)
+            for (int i = 0; i < order.length(); i++) {
+                Cms.Site s = byKey.remove(order.optString(i));
+                if (s != null) out.add(s);
+            }
+        out.addAll(byKey.values());
+        return out;
+    }
+
+    /** mkoai 2.0.74: the persisted profile (order + removed) after deleting keys. order keeps the surviving keys in their given order; removed gains the deleted keys. Pure JSON — the JVM tests pin the round-trip. */
+    static org.json.JSONObject profileAfterDelete(
+            org.json.JSONObject saved,
+            java.util.List<String> survivingKeys,
+            java.util.Collection<String> deleteKeys)
+            throws org.json.JSONException {
+        org.json.JSONArray hidden = saved.optJSONArray("removed");
+        if (hidden == null) hidden = new org.json.JSONArray();
+        for (String k : deleteKeys) hidden.put(k);
+        saved.put("removed", hidden);
+        org.json.JSONArray order = new org.json.JSONArray();
+        for (String k : survivingKeys) order.put(k);
+        saved.put("order", order);
+        return saved;
+    }
+
+    /** mkoai 2.0.74: the persisted profile after deleting ALL sources — a clean reset for this origin. order is empty AND removed is empty, so re-importing the SAME config brings every source back (user decision 2026-11-17: 全刪等於清空重來). Single deletes keep using profileAfterDelete, which keeps the removed list. Pure JSON — the JVM tests pin the round-trip. */
+    static org.json.JSONObject profileAfterDeleteAll(org.json.JSONObject saved)
+            throws org.json.JSONException {
+        saved.put("order", new org.json.JSONArray());
+        saved.put("removed", new org.json.JSONArray());
+        return saved;
+    }
+
+    /** mkoai 2.0.74: pick the fallback current source after a delete — the preferred source when available, else the first available one, else null (no source left). Pure over key sets so the JVM tests can pin it. */
+    static Cms.Site pickFallback(
+            java.util.List<Cms.Site> sites,
+            java.util.Set<String> preferredKeys,
+            java.util.Set<String> availableKeys) {
+        for (Cms.Site s : sites) {
+            if (preferredKeys.contains(s.key) && availableKeys.contains(s.key)) return s;
+        }
+        for (Cms.Site s : sites) {
+            if (availableKeys.contains(s.key)) return s;
+        }
+        return null;
     }
 
     static void manage(MainActivity a) {
@@ -109,14 +159,13 @@ final class SourcePicker {
             java.util.List<Cms.Site> sites = new java.util.ArrayList<>(config.sites);
             sites.remove(site);
             if (target >= 0) sites.add(target, site);
-            else {
-                org.json.JSONArray hidden = saved.optJSONArray("removed");
-                if (hidden == null) hidden = new org.json.JSONArray();
-                saved.put("removed", hidden.put(site.key));
-            }
-            org.json.JSONArray order = new org.json.JSONArray();
-            for (Cms.Site s : sites) order.put(s.key);
-            saved.put("order", order);
+            java.util.List<String> survivingKeys = new java.util.ArrayList<>();
+            for (Cms.Site s : sites) survivingKeys.add(s.key);
+            java.util.Collection<String> deletedKeys =
+                    target < 0
+                            ? java.util.Collections.singletonList(site.key)
+                            : java.util.Collections.emptyList();
+            saved = profileAfterDelete(saved, survivingKeys, deletedKeys);
             android.content.SharedPreferences.Editor editor =
                     a.prefs.edit().putString(key, saved.toString());
             // mkoai 2.0.38: deleting the current source auto-switches to
@@ -125,21 +174,13 @@ final class SourcePicker {
             if (target < 0 && site.key.equals(a.prefs.getString(Prefs.SELECTED_SITE, ""))) {
                 editor.remove(Prefs.SELECTED_SITE);
                 editor.remove(Prefs.LOADING_SITE);
-                Cms.Site fallback = null;
+                java.util.Set<String> preferredKeys = new java.util.HashSet<>();
+                java.util.Set<String> availableKeys = new java.util.HashSet<>();
                 for (Cms.Site s : sites) {
-                    if (SourcePreferences.isPreferred(a, s) && a.available(s)) {
-                        fallback = s;
-                        break;
-                    }
+                    if (SourcePreferences.isPreferred(a, s)) preferredKeys.add(s.key);
+                    if (a.available(s)) availableKeys.add(s.key);
                 }
-                if (fallback == null) {
-                    for (Cms.Site s : sites) {
-                        if (a.available(s)) {
-                            fallback = s;
-                            break;
-                        }
-                    }
-                }
+                Cms.Site fallback = pickFallback(sites, preferredKeys, availableKeys);
                 if (fallback != null) {
                     editor.putString(Prefs.SELECTED_SITE, fallback.key);
                     editor.putString(Prefs.LOADING_SITE, fallback.key);
@@ -151,11 +192,26 @@ final class SourcePicker {
             }
             config.sites.clear();
             config.sites.addAll(sites);
-            a.back.clear();
-            a.open(new MainActivity.Screen(a::home), false);
+            // mkoai 2.0.74: do NOT navigate away. The picker is a dialog
+            // over the current page; the old tail (back.clear + open(home))
+            // replaced a.root and reset Settings to its root page, and
+            // show(a) then ran while the new root was still unlaid-out, so
+            // a.root.getWidth() was 0 and the dialog got a negative window
+            // width — the picker came back with every control pushed
+            // off-screen (2.0.73 field video, 2026-11-17). Stay on the
+            // current page, refresh Settings in place so the "當前：" capsule
+            // follows the new current source, and just re-show the picker.
+            refreshSettingsInPlace(a);
             show(a);
         } catch (org.json.JSONException e) {
             a.notice("無法儲存線路順序");
+        }
+    }
+
+    /** mkoai 2.0.74: re-render the Settings page in place after a source edit (MobileShell.refreshSettingsAfterSourceEdit). No-op unless the user is on the Settings tab; never navigates or replaces the root, so the open picker keeps a laid-out root and the Settings sub-page stays where the user left it. */
+    private static void refreshSettingsInPlace(MainActivity a) {
+        if (a.current != null && a.current.mobileHome != null) {
+            a.current.mobileHome.refreshSettingsAfterSourceEdit();
         }
     }
 
@@ -451,6 +507,22 @@ final class SourcePicker {
                             a.importDialog();
                         }));
         a.addButton(footer, a.navButton("完成", "source-close", dialog::dismiss));
+        // mkoai 2.0.74: one-click delete-all (phone only — TV has no such
+        // picker, so the button is not added there). Destructive, so it
+        // confirms first (confirmDeleteAllSources). The footer loop below
+        // gives it the same weight-1 / 38dp treatment as the other three.
+        if (!tv) {
+            Button deleteAllBtn =
+                    a.navButton(
+                            "刪除全部",
+                            "source-delete-all",
+                            () -> {
+                                dialog.dismiss();
+                                confirmDeleteAllSources(a);
+                            });
+            deleteAllBtn.setTextColor(0xffef4444);
+            a.addButton(footer, deleteAllBtn);
+        }
         for (int i = 0; i < footer.getChildCount(); i++) {
             View control = footer.getChildAt(i);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, a.dp(38), 1);
@@ -502,7 +574,17 @@ final class SourcePicker {
                     else if (grid.getChildCount() > 0) grid.getChildAt(0).requestFocus();
                 });
         dialog.show();
-        if (window != null) window.setLayout(Math.min(a.dp(720), a.root.getWidth() - marginH), -2);
+        // mkoai 2.0.74: windowWidth(), not a.root.getWidth(). The root may be
+        // a fresh, never-laid-out FrameLayout (getWidth() == 0) when show()
+        // follows a navigation, which used to pass a NEGATIVE width here
+        // (0 - marginH) and corrupt the dialog window — the picker came back
+        // wider than the screen with every right-side control (預設偏好源,
+        // dot / ✓ / ✕, footer text) pushed off-screen. windowWidth() is
+        // stable (last measured width, or the display width) and equals the
+        // laid-out root width on the normal path, so the dialog size is
+        // unchanged there.
+        if (window != null)
+            window.setLayout(Math.min(a.dp(720), a.windowWidth() - marginH), -2);
     }
 
     /** mkoai 2.0.38: light VidHub-style card background (green when selected/focused). */
@@ -582,6 +664,49 @@ final class SourcePicker {
                             edit(a, a.config, site, -1);
                         })
                 .show();
+    }
+
+    /** mkoai 2.0.74: one-click delete-all — confirm first; the title states it deletes every source and leaves 0. */
+    private static void confirmDeleteAllSources(MainActivity a) {
+        Cms.Config config = a.config;
+        if (config == null || config.sites.isEmpty()) {
+            a.notice("目前沒有片源可以刪除");
+            return;
+        }
+        int count = config.sites.size();
+        new AppDialog.Builder(a)
+                .wrapChoices()
+                .setTitle("刪除全部片源？")
+                .setMessage(
+                        "將一次刪除全部 "
+                                + count
+                                + " 個片源，之後只剩 0 個片源；首頁將沒有任何片源，之後重新匯入同一份設定檔，片源會全部回來。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("全部刪除", (d, w) -> deleteAllSources(a, config))
+                .show();
+    }
+
+    /** mkoai 2.0.74: delete every source at once — one commit, one re-show. Unlike a single delete, the profile for this origin is RESET (order AND removed both empty), so re-importing the SAME config brings every source back — delete-all is a clean slate (user decision 2026-11-17: 全刪等於清空重來). SELECTED_SITE / LOADING_SITE are cleared so nothing points at a deleted source. After this the picker shows 0 個片源, the home shows its empty welcome, and 更新配置 can import again. */
+    private static void deleteAllSources(MainActivity a, Cms.Config config) {
+        if (a.config != config) return;
+        try {
+            String key = profile(config.origin.isEmpty() ? a.configOrigin : config.origin);
+            org.json.JSONObject saved = new org.json.JSONObject(a.prefs.getString(key, "{}"));
+            saved = profileAfterDeleteAll(saved);
+            android.content.SharedPreferences.Editor editor =
+                    a.prefs.edit().putString(key, saved.toString());
+            editor.remove(Prefs.SELECTED_SITE);
+            editor.remove(Prefs.LOADING_SITE);
+            if (!editor.commit()) {
+                a.notice("刪除全部片源未能儲存，請重試");
+                return;
+            }
+            config.sites.clear();
+            refreshSettingsInPlace(a);
+            show(a);
+        } catch (org.json.JSONException e) {
+            a.notice("無法儲存線路變更");
+        }
     }
 
     static void showSavedConfigs(MainActivity a) {
