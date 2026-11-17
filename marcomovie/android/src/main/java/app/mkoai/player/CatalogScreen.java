@@ -473,6 +473,55 @@ final class CatalogScreen {
 
     static void historyPage(MainActivity a) {
         a.renderPage("觀看歷史", "CONTINUE WATCHING");
+        // mkoai 2.0.73 (item 1): back circle at the top-left, the same
+        // style as the search tab's back button (38dp dark-glass
+        // circle, "‹" 22sp white, same glassBg + press feedback).
+        // Tap pops this Screen exactly like the system back button
+        // (a.onBackPressed): the dock entry returns to the home tab,
+        // the settings / welcome / TV entries return to the page that
+        // opened history. open() with history=true always pushed the
+        // opener, so the stack is never empty here and the app never
+        // exits from this button. It sits above the eyebrow (body
+        // index 0) and shows even when the history is empty. The
+        // dark-glass background is non-transparent, so the 2.0.72
+        // retintRenderPage walk skips it and the white glyph stays
+        // readable on any page tone.
+        LinearLayout backRow = a.row();
+        backRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView historyBackBtn = a.text("‹", 22, MainActivity.WHITE);
+        historyBackBtn.setTag("history-back");
+        historyBackBtn.setGravity(Gravity.CENTER);
+        historyBackBtn.setBackground(
+                MobileShell.glassBg(0xb034343a, 0xc01e1e22, a.dp(999), a.dp(0.8f), 0x38ffffff));
+        MobileDetailScreen.bindTouchFeedback(historyBackBtn);
+        historyBackBtn.setOnClickListener(v -> a.onBackPressed());
+        if (a.isTvDevice()) {
+            // TV: the remote needs a focusable target (bindTouchFeedback
+            // above cleared focusable, so this runs after it) and a
+            // visible focus state - a brighter glass with a solid white
+            // ring while focused.
+            historyBackBtn.setFocusable(true);
+            historyBackBtn.setOnFocusChangeListener(
+                    (v, f) ->
+                            v.setBackground(
+                                    f
+                                            ? MobileShell.glassBg(
+                                                    0xd04a4a52,
+                                                    0xd02a2a30,
+                                                    a.dp(999),
+                                                    a.dp(1.5f),
+                                                    0xffffffff)
+                                            : MobileShell.glassBg(
+                                                    0xb034343a,
+                                                    0xc01e1e22,
+                                                    a.dp(999),
+                                                    a.dp(0.8f),
+                                                    0x38ffffff)));
+        }
+        backRow.addView(historyBackBtn, new LinearLayout.LayoutParams(a.dp(38), a.dp(38)));
+        a.body.addView(backRow, 0);
+        View backGap = new View(a);
+        a.body.addView(backGap, 1, new LinearLayout.LayoutParams(1, a.dp(10)));
         // 2.0.41: display-only dedupe — the same show+episode shows once
         // (latest update wins); raw records are untouched.
         List<WatchHistory.Entry> entries = WatchHistory.deduped(a.watchHistory());

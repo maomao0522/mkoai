@@ -277,8 +277,10 @@ def main():
           "(dock) DOCK_TAB_INDICES is {0,1,2,3,5,4} (search in, history before settings)")
     check("return hasLiveSources() ? DOCK_TAB_INDICES : new int[] {0, 1, 3, 5, 4};" in ms,
           "(dock) without live sources the dock is {0,1,3,5,4}")
-    check("HISTORY_DOCK_INDEX = 5" in ms and 'HISTORY_DOCK_LABEL = "觀看記錄"' in ms,
-          "(dock) history is pseudo-index 5 with its own label (TAB_NAMES stays 5 long)")
+    # 2.0.73 (deliberate): the dock label is now "記錄" (was "觀看記錄", truncated to
+    # "觀看記" on the dock). Pseudo-index 5 + its own label + TAB_NAMES 5 long unchanged.
+    check("HISTORY_DOCK_INDEX = 5" in ms and 'HISTORY_DOCK_LABEL = "記錄"' in ms,
+          "(dock) history is pseudo-index 5 with its own label (TAB_NAMES stays 5 long; 2.0.73: label is now 記錄 so the dock shows it whole)")
     check("TAB_NAMES = {\"主頁\", \"搜尋\", \"直播\", \"收藏\", \"設定\"}" in ms,
           "(dock) TAB_NAMES still has only the 5 real tabs")
     check("private final View[] navTabs = new View[6];" in ms
@@ -411,10 +413,14 @@ def main():
           and "TOP_FADE_FIXED_RGB" not in ms
           and "private int baseRgb = HomeRows2061.HOME_SLATE_BG;" in ms,
           "(tone) the top veil follows the tone on every tab (switchTab + flip; the fixed dark band AND its dark default are gone)")
-    check("bottomEdgeFade.setBaseColor(heroDiffusionShown)" in ms
-          and "setBaseColor(0x060a08)" not in ms
+    # 2.0.73 (deliberate): the bottom veil layer is GONE (user: home bottom must be the
+    # flat page tone like every other tab). No bottomEdgeFade field, no setBaseColor
+    # call sites, no instantiation; the BottomEdgeFadeView class stays unused so the
+    # 2066/2069-2071 file-slicing (which splits at its class line) still works.
+    check("bottomEdgeFade" not in ms
+          and "new BottomEdgeFadeView" not in ms
           and "private int baseRgb = HomeRows2061.HOME_SLATE_BG & 0x00ffffff;" in ms,
-          "(tone) the bottom veil follows the tone on every tab (no more fixed dark band or dark default off-home)")
+          "(tone) 2.0.73: the bottom veil layer is gone (home bottom is the flat page tone like every other tab; BottomEdgeFadeView class kept unused)")
     check("static int accentText(int bg)" in ht
           and "TEXT_ACCENT_LIGHT_BG = 0xff0d47a1" in ht
           and "TEXT_ACCENT_DARK_BG = 0xff5ac8fa" in ht,
@@ -522,14 +528,14 @@ def main():
 
     # ---- Version ----
     ev = open(os.path.join(ROOT, "android/edition-versions.json"), encoding="utf-8").read()
-    check('"2.0.71"' in ev and "20072" in ev, "edition-versions.json = 2.0.71 / 20072")
+    check('"2.0.73"' in ev and "20074" in ev, "edition-versions.json = 2.0.73 / 20074")
     import json as _json
     lite = _json.loads(ev).get("android-lite", {})
     check(lite.get("versionName") == "0.5.3" and lite.get("versionCode") == 53,
           "edition-versions.json: lite stays 0.5.3 / 53")
     man = open(os.path.join(ROOT, "android/src/main/AndroidManifest.xml"), encoding="utf-8").read()
-    check('android:versionName="2.0.71"' in man and 'android:versionCode="20072"' in man,
-          "AndroidManifest.xml = 2.0.71 / 20072")
+    check('android:versionName="2.0.73"' in man and 'android:versionCode="20074"' in man,
+          "AndroidManifest.xml = 2.0.73 / 20074")
 
     print(f"\n{TOTAL - len(FAILED)}/{TOTAL} checks passed")
     if FAILED:

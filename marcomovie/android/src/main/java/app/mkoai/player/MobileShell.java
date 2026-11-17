@@ -226,10 +226,6 @@ final class MobileShell {
     private final java.util.List<TextView> heroRatings = new ArrayList<>();
     private final java.util.Set<String> heroBackdropResolved = new java.util.HashSet<>();
     private LinearLayout floatingDock;
-    // mkoai 2.0.66: the bottom-edge veil behind the dock (kept as a field
-    // so the flip block in applyDiffusionFrame can re-tint it with the
-    // page tone; it used to be a render-local with a fixed dark base).
-    private BottomEdgeFadeView bottomEdgeFade;
     // mkoai 2.0.71: the dock arrays are size 6 — indices 0-4 are the
     // real tabs, index 5 is the watch-history pseudo-item (a page, not
     // a tab: it opens historyPage instead of switchTab).
@@ -242,7 +238,10 @@ final class MobileShell {
     // joins as a pseudo-item before settings (4). Order: home, search,
     // [live], favorites, history, settings.
     private static final int HISTORY_DOCK_INDEX = 5;
-    private static final String HISTORY_DOCK_LABEL = "觀看記錄";
+    // mkoai 2.0.73: "記錄" — the old four-glyph label was truncated
+    // to three glyphs on the dock; the history page title stays
+    // "觀看歷史" and every other 觀看記錄 string is untouched.
+    private static final String HISTORY_DOCK_LABEL = "記錄";
     private static final int[] DOCK_TAB_INDICES = {0, 1, 2, 3, 5, 4};
 
     // mkoai 2.0.38: the 直播 tab only exists while a live source is
@@ -1148,16 +1147,23 @@ final class MobileShell {
                     topFade,
                     new FrameLayout.LayoutParams(-1, topFadeHeightPx(), Gravity.TOP));
 
-            // Layer 3: Bottom edge subtle vignette behind the floating dock
-            BottomEdgeFadeView bottomFade = new BottomEdgeFadeView(a);
-            bottomEdgeFade = bottomFade;
-            bottomFade.setClickable(false);
-            bottomFade.setFocusable(false);
-            a.root.addView(
-                    bottomFade,
-                    new FrameLayout.LayoutParams(-1, a.dp(92 * navScale), Gravity.BOTTOM));
+            // mkoai 2.0.73: Layer 3 (the bottom-edge veil) is GONE.
+            // Its colour only followed the tone inside the diffusion
+            // flip block, so a hero rotation that kept the light class
+            // left it on the previous hero's tone while the page
+            // followed the new one - a stale light veil over the home
+            // bottom (the white haze in the user's 10:32 screenshot:
+            // the bottom band measured ~(129,129,135) grey against the
+            // (93,81,81) page tone). Other tabs never showed it:
+            // switchTab re-tinted the veil to the current tone on
+            // leaving home, so it matched the page there. With the
+            // layer gone the home bottom is the flat page tone like
+            // every other tab; the dock pill keeps its own dark glass.
+            // The BottomEdgeFadeView class stays below (unused) so the
+            // 2066 veil-colour pins and the 2069-2071 runner slices
+            // keep working.
 
-            // Layer 4: iPhone Floating Liquid Glass 4-Tab Pill Dock
+            // Layer 3: iPhone Floating Liquid Glass 4-Tab Pill Dock
             LinearLayout bottomDock = buildNavigationBar(false);
             floatingDock = bottomDock;
             int dockWidthPx =
@@ -1688,6 +1694,7 @@ final class MobileShell {
         // even when the tone itself is unchanged).
         // mkoai 2.0.71: leaving home no longer restores the fixed dark
         // veil — the veil follows the hero tone on every tab now.
+        // mkoai 2.0.73: the bottom veil is gone entirely (see show()).
         if (nextTab != 0 && homeTopFade != null) {
             homeTopFade.setBaseColor(heroDiffusionShown);
         }
@@ -1695,10 +1702,9 @@ final class MobileShell {
         // diffusion) and short everywhere else (the status-bar veil).
         updateTopFadeHeight();
         if (nextTab != 0) {
-            // mkoai 2.0.71: the bottom veil and the status-bar icons
-            // follow the hero tone on every tab now (was fixed dark +
-            // white icons off-home).
-            if (bottomEdgeFade != null) bottomEdgeFade.setBaseColor(heroDiffusionShown);
+            // mkoai 2.0.71: the status-bar icons follow the hero tone
+            // on every tab now (was white icons off-home).
+            // mkoai 2.0.73: the bottom veil is gone (see show()).
             applyStatusBarIcons(HomeTone2066.isLight(heroDiffusionShown));
             homeTextDirty = true;
         }
@@ -3271,12 +3277,13 @@ final class MobileShell {
      * drawable across rebuilds of its content.
      *
      * <p>mkoai 2.0.66: the tone-following chrome (top overlay, home
-     * text, dock, bottom veil, status-bar icons) is re-tinted ONLY when
+     * text, dock, status-bar icons) is re-tinted ONLY when
      * the light/dark state flips or a fresh build lands — never per
      * animation frame. The per-frame work stays what it was (the bloom
      * setColors above); the flip block is a handful of setTextColor /
      * setBackground / setBaseColor calls, no layout, no invalidation
-     * storm.
+     * storm. (2.0.73: the bottom veil left this list — the layer is
+     * gone, see show().)
      */
     /**
      * mkoai 2.0.69: the top veil's height in px. On the home tab it is
@@ -3364,7 +3371,6 @@ final class MobileShell {
             retintProgressTracks(heroDiffusionShown);
             retintDock();
             applyStatusBarIcons(light);
-            if (bottomEdgeFade != null) bottomEdgeFade.setBaseColor(heroDiffusionShown);
             homeIsLight = light;
         }
         // mkoai 2.0.71: the top veil follows the hero tone on every tab
@@ -8784,6 +8790,11 @@ final class MobileShell {
     }
 
     /** Soft bottom-edge vignette behind the floating Liquid Glass dock. */
+    // mkoai 2.0.73: kept unused — the bottom-edge layer that used
+    // this view is gone (see show(): its colour went stale between
+    // hero rotations and read as a white haze over the home bottom).
+    // The class stays so the 2066 veil-colour pins and the 2069-2071
+    // runner slices keep working.
     private static final class BottomEdgeFadeView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         // mkoai 2.0.66: the veil's base colour — it starts on the
