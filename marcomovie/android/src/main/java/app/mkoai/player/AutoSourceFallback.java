@@ -250,6 +250,17 @@ final class AutoSourceFallback {
                                                 // never outrank the priority above).
                                                 SourceSpeed2068.Health health =
                                                         SourceSpeed2068.healthFor(a, site.key);
+                                                // mkoai 2.0.78: quality tier of the
+                                                // line auto-pick would play
+                                                // here, captured at collection
+                                                // time for the ranking.
+                                                int tier =
+                                                        QualityTier2078.tierForDetail(
+                                                                detail,
+                                                                a.prefs.getString(
+                                                                        Prefs.PREFERRED_LINE, ""),
+                                                                a.prefs.getBoolean(
+                                                                        Prefs.HIDE_NETDISK, false));
                                                 RankedCandidate rc =
                                                         new RankedCandidate(
                                                                 new Playable(site, match, detail),
@@ -260,7 +271,8 @@ final class AutoSourceFallback {
                                                                 health != null
                                                                         && SourceSpeed2068.coolingDown(
                                                                                 health,
-                                                                                System.currentTimeMillis()));
+                                                                                System.currentTimeMillis()),
+                                                                tier);
                                                 collected.add(rc);
                                                 if (hasEpisode && pri == 0) {
                                                     // Nothing can outrank the
@@ -313,7 +325,7 @@ final class AutoSourceFallback {
         return false;
     }
 
-    /** 2.0.44: a collected reselect candidate, with the ranking signals. {@code verified} and {@code latencyMs} are filled in after the probe runs. {@code emaMs} / {@code coolingDown} are the learned speed + health at collection time (mkoai 2.0.68). */
+    /** 2.0.44: a collected reselect candidate, with the ranking signals. {@code verified} and {@code latencyMs} are filled in after the probe runs. {@code emaMs} / {@code coolingDown} are the learned speed + health at collection time (mkoai 2.0.68). {@code qualityTier} is the HD/normal/TC tier of the line auto-pick would actually play for this detail (mkoai 2.0.78), captured at collection time so warmed candidates carry it too. */
     static final class RankedCandidate {
         final Playable playable;
         final boolean hasEpisode;
@@ -325,6 +337,8 @@ final class AutoSourceFallback {
         final long emaMs;
         /** True when this source failed playback within the cooldown at collection time. */
         final boolean coolingDown;
+        /** Quality tier of the line that would play (QualityTier2078); lower is better. */
+        final int qualityTier;
 
         RankedCandidate(Playable playable, boolean hasEpisode, boolean verified, int priority) {
             this(playable, hasEpisode, verified, priority, -1, false);
@@ -345,9 +359,40 @@ final class AutoSourceFallback {
                 boolean hasEpisode,
                 boolean verified,
                 int priority,
+                long emaMs,
+                boolean coolingDown,
+                int qualityTier) {
+            this(playable, hasEpisode, verified, priority, -1, emaMs, coolingDown, qualityTier);
+        }
+
+        RankedCandidate(
+                Playable playable,
+                boolean hasEpisode,
+                boolean verified,
+                int priority,
                 long latencyMs,
                 long emaMs,
                 boolean coolingDown) {
+            this(
+                    playable,
+                    hasEpisode,
+                    verified,
+                    priority,
+                    latencyMs,
+                    emaMs,
+                    coolingDown,
+                    QualityTier2078.TIER_NORMAL);
+        }
+
+        RankedCandidate(
+                Playable playable,
+                boolean hasEpisode,
+                boolean verified,
+                int priority,
+                long latencyMs,
+                long emaMs,
+                boolean coolingDown,
+                int qualityTier) {
             this.playable = playable;
             this.hasEpisode = hasEpisode;
             this.verified = verified;
@@ -355,6 +400,7 @@ final class AutoSourceFallback {
             this.latencyMs = latencyMs;
             this.emaMs = emaMs;
             this.coolingDown = coolingDown;
+            this.qualityTier = qualityTier;
         }
     }
 
@@ -372,11 +418,20 @@ final class AutoSourceFallback {
      * post-failure cooldown sinks below a healthy one at the same
      * priority, then the faster one wins (learned EMA first, else this
      * round's probe latency). Pure and unit-tested.
+     *
+     * mkoai 2.0.78: the HD/normal/TC quality tier sits after the ad-rule
+     * priority and before probe-verified — an HD candidate beats a TC
+     * candidate at the same priority even when the TC probe was far
+     * faster, and a TC candidate is last among its priority peers.
+     * The ad-rule priority still wins first (it is the user's explicit
+     * choice for ad handling; quality is a ranking signal like speed).
      */
     static int compareRanked(RankedCandidate x, RankedCandidate y) {
         int c = Boolean.compare(y.hasEpisode, x.hasEpisode);
         if (c != 0) return c;
         c = Integer.compare(x.priority, y.priority);
+        if (c != 0) return c;
+        c = Integer.compare(x.qualityTier, y.qualityTier);
         if (c != 0) return c;
         c = Boolean.compare(y.verified, x.verified);
         if (c != 0) return c;
@@ -555,6 +610,16 @@ final class AutoSourceFallback {
                                                 Probe probe =
                                                         probeEpisode(
                                                                 a, s2, warmDetail, wantedEpisode);
+                                                // mkoai 2.0.78: quality tier
+                                                // of the line auto-pick would
+                                                // play here.
+                                                int warmTier =
+                                                        QualityTier2078.tierForDetail(
+                                                                warmDetail,
+                                                                a.prefs.getString(
+                                                                        Prefs.PREFERRED_LINE, ""),
+                                                                a.prefs.getBoolean(
+                                                                        Prefs.HIDE_NETDISK, false));
                                                 entries.add(
                                                         new WarmedEntry(
                                                                 new RankedCandidate(
@@ -572,7 +637,8 @@ final class AutoSourceFallback {
                                                                                         .coolingDown(
                                                                                                 health,
                                                                                                 System
-                                                                                                        .currentTimeMillis())),
+                                                                                                        .currentTimeMillis()),
+                                                                        warmTier),
                                                                 System.currentTimeMillis()));
                                             }
                                         } catch (Exception ignored) {
@@ -632,7 +698,8 @@ final class AutoSourceFallback {
                             e.candidate.priority,
                             e.candidate.latencyMs,
                             e.candidate.emaMs,
-                            e.candidate.coolingDown);
+                            e.candidate.coolingDown,
+                            e.candidate.qualityTier);
             if (best == null || compareRanked(fresh, best) < 0) best = fresh;
         }
         return best;

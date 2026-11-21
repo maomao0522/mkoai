@@ -141,6 +141,11 @@ final class SourcePreferences {
      * line and a player line always loses to any playable line. With
      * only player lines left, the best of them is still returned (never
      * null / never "no line").
+     *
+     * <p>mkoai 2.0.78: a TC (cam) line takes a -100,000 penalty
+     * (QualityTier2078.TC_SCORE_PENALTY), so it loses to any non-TC
+     * line — a TC line still wins when it is the only playable line,
+     * because the penalty stays above the player-line -1,000,000.
      */
     static int lineIndex(String preferredLine, boolean hideNetdisk, Cms.Video video) {
         if (video == null || video.lines == null || video.lines.isEmpty()) return 0;
@@ -174,6 +179,11 @@ final class SourcePreferences {
             if (name.contains("不卡")) score += 15;
             if (name.contains("高清") || name.contains("多線") || name.contains("多线")) score += 10;
             if (name.contains("1080")) score += 5;
+            // mkoai 2.0.78: a TC (cam / 槍版 / 搶先) line always loses
+            // to any non-TC line, even a slower one with fewer episodes —
+            // but it still beats an unplayable player line, so a lone TC
+            // line remains playable.
+            if (QualityTier2078.isTc(name)) score -= QualityTier2078.TC_SCORE_PENALTY;
             // mkoai 2.0.45: prefer a direct m3u8 line, rank a playback-page
             // ("player") line last — verified live 2026-11-14: 巨量's
             // 《艾倫的宇宙》 carries jlm3u8 (direct m3u8) and jlplayer
