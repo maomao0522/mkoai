@@ -61,6 +61,8 @@ final class Prefs {
     static final String DANMAKU_DEFAULT = "danmaku_default";
     static final String PICTURE_EFFECT = "picture_effect";
     static final String AUDIO_EFFECT = "audio_effect";
+    // mkoai 2.0.79: 畫質增強（Media3 銳化）: 0 關閉 / 1 效率 / 2 質量，預設關閉。
+    static final String VIDEO_ENHANCE = "video_enhance";
     static final String SEARCH_THREADS = "search_threads";
     static final String SEARCH_TIMEOUT = "search_timeout";
     static final String EPISODES_DESCENDING = "episodes_descending";
@@ -167,6 +169,7 @@ final class Prefs {
         DANMAKU_DEFAULT,
         PICTURE_EFFECT,
         AUDIO_EFFECT,
+        VIDEO_ENHANCE,
         SEARCH_THREADS,
         SEARCH_TIMEOUT,
         EPISODES_DESCENDING,
@@ -218,6 +221,7 @@ final class Prefs {
         ranges.put(SUBTITLE_OFFSET_X, new int[] {-100, 100});
         ranges.put(PICTURE_EFFECT, new int[] {0, 3});
         ranges.put(AUDIO_EFFECT, new int[] {0, 3});
+        ranges.put(VIDEO_ENHANCE, new int[] {0, 2});
         ranges.put(SEARCH_THREADS, new int[] {2, 12});
         ranges.put(SEARCH_TIMEOUT, new int[] {10, 30});
         ranges.put(QUALITY_PREF, new int[] {0, 1});

@@ -253,6 +253,9 @@ public class MoviePlayer {
                     if (!this.ijkMode && sp.getBoolean(Prefs.TUNNELED_PLAYBACK, false))
                         trackParams.setTunnelingEnabled(true);
                     exo.setTrackSelectionParameters(trackParams.build());
+                    // mkoai 2.0.79: 畫質增強 — apply the stored mode (default off) as
+                    // soon as the player exists, so a reload re-applies it too.
+                    applyVideoEnhance();
                     exo.addAnalyticsListener(
                             new androidx.media3.exoplayer.analytics.AnalyticsListener() {
                                 @Override
@@ -1382,6 +1385,21 @@ public class MoviePlayer {
                     }
                     return info;
                 });
+    }
+
+    /**
+     * mkoai 2.0.79: re-apply the stored 畫質增強 mode to the live ExoPlayer. Safe to
+     * call before the player exists (system backend) or after release — it is a
+     * no-op when there is no ExoPlayer. Called once at player creation and again
+     * whenever the user changes the mode in the player menu.
+     */
+    public void applyVideoEnhance() {
+        if (exo == null) return;
+        int mode =
+                context
+                        .getSharedPreferences(Prefs.FILE, 0)
+                        .getInt(Prefs.VIDEO_ENHANCE, VideoEnhance2079.MODE_OFF);
+        VideoEnhance2079.applyTo(exo, mode);
     }
 
     public String playbackInfo() {

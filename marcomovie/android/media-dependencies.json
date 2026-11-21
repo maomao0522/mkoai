@@ -160,6 +160,14 @@
     "sha256": "6cd78cad4c1ef8aa16876fcd923eefc3894b538960798698a891cc7f419b8b34"
   },
   {
+    "name": "media3-effect",
+    "group": "androidx.media3",
+    "version": "1.5.1",
+    "license": "The Apache Software License, Version 2.0",
+    "url": "https://dl.google.com/dl/android/maven2/androidx/media3/media3-effect/1.5.1/media3-effect-1.5.1.aar",
+    "sha256": "29ca94492cc7ae86b7817da3449e2c29504cd7fdd410a8603b74098260291955"
+  },
+  {
     "name": "media3-exoplayer",
     "group": "androidx.media3",
     "version": "1.5.1",

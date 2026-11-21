@@ -259,8 +259,10 @@ def main():
           "quota: hideUntil lives under quota_hide_<feature> in QuotaState2066, never in Prefs KEYS")
     m = re.search(r"static final String\[\] KEYS = \{(.*?)\};", prefs, re.S)
     keys = [e.strip().rstrip(",") for e in m.group(1).strip().splitlines() if e.strip()]
-    check(len(keys) == 41,
-          "quota: Prefs KEYS still has exactly 41 entries (no quota key added)")
+    # 2.0.79: 41 -> 42 (VIDEO_ENHANCE added — a backed-up player setting,
+    # not a quota key; the quota tripwire below still holds).
+    check(len(keys) == 42,
+          "quota: Prefs KEYS still has exactly 42 entries (no quota key added)")
     settings_keys = [
         "SEARCH_THREADS", "SEARCH_TIMEOUT", "EXPERIMENTAL_CSP",
         "HIDE_NETDISK", "MERGE_SAME_TITLE", "YOUTH_MODE",

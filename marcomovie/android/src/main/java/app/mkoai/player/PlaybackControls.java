@@ -1632,6 +1632,21 @@ final class PlaybackControls {
                 });
     }
 
+    void videoEnhance() {
+        // mkoai 2.0.79: Media3 銳化 — applied live to the current player, no
+        // reload; the mode is stored and re-applied at player creation.
+        choose(
+                "畫質增強",
+                VideoEnhance2079.LABELS,
+                VideoEnhance2079.clampMode(
+                        a.prefs.getInt(Prefs.VIDEO_ENHANCE, VideoEnhance2079.MODE_OFF)),
+                i -> {
+                    a.prefs.edit().putInt(Prefs.VIDEO_ENHANCE, i).apply();
+                    if (a.player != null) a.player.applyVideoEnhance();
+                    updateLabels();
+                });
+    }
+
     void pictureEffect() {
         choose(
                 "畫面色彩",
@@ -2807,7 +2822,7 @@ final class PlaybackControls {
 
     void more() {
         if ("live".equals(site.key)) {
-            String[] live = {"上一頻道", "選擇頻道", "播放線路", "播放器與解碼", "畫面色彩", "播放資訊", "返回頻道列表"};
+            String[] live = {"上一頻道", "選擇頻道", "播放線路", "播放器與解碼", "畫面色彩", "畫質增強：" + VideoEnhance2079.LABELS[VideoEnhance2079.clampMode(a.prefs.getInt(Prefs.VIDEO_ENHANCE, VideoEnhance2079.MODE_OFF))], "播放資訊", "返回頻道列表"};
             choose(
                     "直播設定",
                     live,
@@ -2838,6 +2853,9 @@ final class PlaybackControls {
                                 pictureEffect();
                                 break;
                             case 5:
+                                videoEnhance();
+                                break;
+                            case 6:
                                 message(
                                         a.player == null
                                                 ? "播放器尚未準備好。"
@@ -2845,7 +2863,7 @@ final class PlaybackControls {
                                                         + "\n"
                                                         + surface.outputName());
                                 break;
-                            case 6:
+                            case 7:
                                 a.leavePlayback();
                                 break;
                         }
@@ -2862,6 +2880,7 @@ final class PlaybackControls {
             "DM",
             modernTv ? "播放器與解碼" : "音效",
             "畫面色彩",
+            "畫質增強：" + VideoEnhance2079.LABELS[VideoEnhance2079.clampMode(a.prefs.getInt(Prefs.VIDEO_ENHANCE, VideoEnhance2079.MODE_OFF))],
             "迴圈播放",
             "自動播放下集：" + (a.prefs.getBoolean(Prefs.AUTO_NEXT, true) ? "開啟" : "關閉"),
             "播放資訊",
@@ -2919,9 +2938,12 @@ final class PlaybackControls {
                             pictureEffect();
                             break;
                         case 9:
-                            repeat();
+                            videoEnhance();
                             break;
                         case 10:
+                            repeat();
+                            break;
+                        case 11:
                             a.prefs
                                     .edit()
                                     .putBoolean(
@@ -2929,7 +2951,7 @@ final class PlaybackControls {
                                             !a.prefs.getBoolean(Prefs.AUTO_NEXT, true))
                                     .apply();
                             break;
-                        case 11:
+                        case 12:
                             message(
                                     a.player == null
                                             ? "播放器尚未準備好。"
@@ -2937,7 +2959,7 @@ final class PlaybackControls {
                                                     + "\n"
                                                     + surface.outputName());
                             break;
-                        case 12:
+                        case 13:
                             a.leavePlayback();
                             break;
                     }
