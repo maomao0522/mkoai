@@ -1665,6 +1665,60 @@ final class PlaybackController {
                                                         });
                                                 a.playStatus.setText("正在載入播放…");
                                                 ready.prepareAsync();
+                                                // mkoai 2.0.80: first-frame watchdog — a line
+                                                // that stalls without ever erroring (dead m3u8,
+                                                // hung playlist) used to spin 「正在載入…」 forever
+                                                // because the fallback chain only runs after
+                                                // onPlayerError. Arm one delayed check on the UI
+                                                // handler: 20s with no first frame and no
+                                                // prepared state drives the existing error path
+                                                // (next quality → grace retry → next line →
+                                                // next source). VOD only: live has no first
+                                                // frame to wait for and the system backend has
+                                                // no ExoPlayer first-frame signal. Each hop
+                                                // re-enters playerPage and re-arms a fresh
+                                                // window; the ticket guard retires stale checks.
+                                                // No user pause can exist here: togglePlayback
+                                                // returns early until prepared, so nothing to
+                                                // wait out — the check only ever fires on a
+                                                // genuinely stalled load.
+                                                if (!useSystemBackend && !"live".equals(s.key)) {
+                                                    final FirstFrameWatchdog2080 watchdog =
+                                                            new FirstFrameWatchdog2080();
+                                                    watchdog.arm(
+                                                            android.os.SystemClock.elapsedRealtime());
+                                                    final Runnable watchdogCheck =
+                                                            new Runnable() {
+                                                                @Override
+                                                                public void run() {
+                                                                    if (ticket != a.generation
+                                                                            || a.isFinishing())
+                                                                        return;
+                                                                    // A first frame disarms it;
+                                                                    // STATE_READY does too (an
+                                                                    // audio-only stream has no
+                                                                    // frame to render).
+                                                                    if (ready.hasRenderedFirstFrame()
+                                                                            || a.prepared) return;
+                                                                    long now =
+                                                                            android.os.SystemClock
+                                                                                    .elapsedRealtime();
+                                                                    if (watchdog.shouldFire(now)) {
+                                                                        a.playStatus.setText(
+                                                                                "線路逾時，正在換線…");
+                                                                        ready.fireFirstFrameWatchdog();
+                                                                    } else {
+                                                                        a.ui.postDelayed(
+                                                                                this,
+                                                                                watchdog.remainingMs(
+                                                                                        now));
+                                                                    }
+                                                                }
+                                                            };
+                                                    a.ui.postDelayed(
+                                                            watchdogCheck,
+                                                            FirstFrameWatchdog2080.TIMEOUT_MS);
+                                                }
                                                 // mkoai 2.0.38 (items 21/22): probe the HLS
                                                 // master playlist in parallel — never blocks
                                                 // the first frame; a failure silently leaves

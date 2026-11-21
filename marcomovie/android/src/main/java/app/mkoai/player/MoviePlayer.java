@@ -1402,6 +1402,45 @@ public class MoviePlayer {
         VideoEnhance2079.applyTo(exo, mode);
     }
 
+    /**
+     * mkoai 2.0.80: has the video renderer shown a frame yet? firstFrameMs is
+     * set by the AnalyticsListener.onRenderedFirstFrame and reset to -1 by every
+     * prepareAsync, so this is false until the first frame of this attempt. The
+     * video renderer is always MediaCodecVideoRenderer in this tree (the FFmpeg
+     * extension is audio-only), so the callback fires on every ExoPlayer path;
+     * the system backend (SystemPlayer) never arms the watchdog.
+     */
+    public boolean hasRenderedFirstFrame() {
+        return onMain(() -> !released && firstFrameMs >= 0);
+    }
+
+    /**
+     * mkoai 2.0.80: drive the existing playback-error path as if the stalled
+     * load had failed. The code is the network-timeout code (2008, in the
+     * 2000–2999 "media connection failed" family), so it is never treated as a
+     * decoder error and the existing chain in PlaybackController runs: next
+     * quality → startup-grace retry → next line → next source → dead end.
+     * No-op when released or when no error listener is attached.
+     */
+    public void fireFirstFrameWatchdog() {
+        onMain(
+                () -> {
+                    if (released || errorListener == null) return null;
+                    AppLog.w(
+                            "MoviePlayer",
+                            "first frame watchdog fired (no frame in "
+                                    + FirstFrameWatchdog2080.TIMEOUT_MS
+                                    + "ms), driving the error path",
+                            null);
+                    errorListener.onError(
+                            this,
+                            androidx.media3.common.PlaybackException
+                                    .ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+                            0);
+                    return null;
+                });
+    }
+
     public String playbackInfo() {
         org.json.JSONObject d = decoderDiagnostics();
         return (ijkMode ? "IJK 相容模式 (Media3 + FFmpeg)\n影片：" : "Exo (Media3)\n影片：")
